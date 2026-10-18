@@ -27,7 +27,8 @@ class ProtocolError(RuntimeError):
 class FlashForgeClient:
     """Small TCP client for legacy FlashForge printers on port 8899.
 
-    Confirmed against a FlashForge Adventurer 4 firmware v2.3.3-3.33.
+    The investigated printer identified as Adventurer 4 firmware v2.2.4 (M115);
+    earlier project notes refer to a separate v2.3.3-3.33 compatibility test.
     Commands are sent as `~GCODE\r\n`. Upload follows the AD4 sender protocol:
     a separate acknowledged preamble, then `M28 <size> 0:/user/name`, payload,
     and `M29` on the upload socket.
@@ -122,63 +123,35 @@ class FlashForgeClient:
                 _report_response(response_callback, gcode.split()[0], response)
                 _require_exact_ok(f"{gcode} preamble", response)
 
-    def upload_and_verify(
+    def upload_and_confirm_listed(
         self,
         local_file: str | os.PathLike[str],
         remote_name: str | None = None,
         progress: ProgressCallback | None = None,
         response_callback: ResponseCallback | None = None,
     ) -> str:
+        """Upload a file and confirm M661 lists its basename, without selecting it.
+
+        Listing presence does not verify the printer-side byte size or content.
+        """
         path = Path(local_file)
         if not path.is_file():
             raise FileNotFoundError(path)
-        expected_size = path.stat().st_size
         remote_path = self.upload(
             path, remote_name, progress=progress, response_callback=response_callback
         )
 
         listing = self.files_raw()
         _report_response(response_callback, "M661", listing)
-
-        upload_path = _upload_remote_path(remote_path.rsplit("/", 1)[-1])
-        selected = self.command(f"M23 {upload_path}")
-        _report_response(response_callback, "M23", selected)
-        _require_ack("M23 file selection", selected)
-
-        opened = re.findall(
-            r"\bFile opened:\s*(.*?)\s+Size:\s*(\d+)\b",
-            selected,
-            re.IGNORECASE,
-        )
-        opened_names = re.findall(r"\bFile opened:\s*([^\r\n]+)", selected, re.IGNORECASE)
         requested_basename = remote_path.rsplit("/", 1)[-1]
-        for opened_name in opened_names:
-            # A size field may be absent, but any reported opened name must still
-            # refer to the requested file before using M27 as a fallback.
-            name_without_size = re.split(r"\s+Size:", opened_name, maxsplit=1, flags=re.IGNORECASE)[0]
-            basename = name_without_size.strip().rsplit("/", 1)[-1]
-            if basename != requested_basename:
-                raise ProtocolError(
-                    f"printer opened {basename!r} instead of requested file {requested_basename!r}"
-                )
-
-        if opened:
-            if len(opened) != 1:
-                raise ProtocolError("printer returned ambiguous M23 file size information")
-            opened_name, reported_size = opened[0]
-            basename = opened_name.strip().rsplit("/", 1)[-1]
-            if basename != requested_basename:
-                raise ProtocolError(
-                    f"printer opened {basename!r} instead of requested file {requested_basename!r}"
-                )
-            remote_size = int(reported_size)
-            if remote_size != expected_size:
-                raise ProtocolError(
-                    f"remote file size mismatch for {remote_path}: expected {expected_size} bytes, printer reports {remote_size}"
-                )
-            return upload_path
-
-        raise ProtocolError(f"M23 did not report the size of uploaded file {upload_path}")
+        listed_paths = re.findall(r"(?:/data/|0:/user/)[^:\x00\r\n]+", listing)
+        listed_basenames = {item.strip().rsplit("/", 1)[-1] for item in listed_paths}
+        if requested_basename not in listed_basenames:
+            raise ProtocolError(
+                f"upload completed, but M661 did not list {requested_basename!r}; "
+                "file presence could not be confirmed"
+            )
+        return remote_path
 
     def print_file(
         self, remote_name: str, response_callback: ResponseCallback | None = None

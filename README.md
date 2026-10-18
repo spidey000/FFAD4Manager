@@ -2,7 +2,9 @@
 
 FFADV4Manager is an open-source Python command-line toolkit for controlling legacy FlashForge printers that are no longer well supported by current FlashForge desktop software. The `ffadv4manager` CLI is designed for Linux terminals and AI-agent workflows; `ad4ctl` remains as a compatibility alias.
 
-The first target is the **FlashForge Adventurer 4**, confirmed working against firmware `v2.3.3-3.33` on TCP port `8899`.
+The first target is the **FlashForge Adventurer 4** on TCP port `8899`. Earlier
+project notes refer to a separate test on firmware `v2.3.3-3.33`; the printer
+used in the 2026-10-18 upload investigation reported firmware `v2.2.4` via M115.
 
 ## Current status
 
@@ -13,7 +15,7 @@ Working today:
 - Print progress readout
 - Parsed and raw printer file listings (`files`, `files-raw`)
 - Upload G-code/GX files
-- Verify upload acknowledgement, remote path, and reported byte size before `--start`
+- Confirm uploaded filename appears in M661; this does not verify stored size/content
 - Optional timestamped JSONL logs of printer upload/verification replies (`--log-file`)
 - Start prints remotely
 - Pause/resume/cancel commands
@@ -114,9 +116,15 @@ ffadv4manager --host 192.168.1.50 upload ~/Downloads/model.gcode --remote-name m
 The input must be an existing, non-empty G-code/GX file (typically exported by a
 slicer); empty files are rejected before the upload starts. The upload command
 does not generate or slice a model. Without `--start`, it only uploads and
-verifies the file; it does not print. Use the separate `print` command to start
-an already-uploaded file, or pass `--start` to explicitly opt into starting it
-after successful verification.
+checks that M661 lists the uploaded filename; it does not select or print the
+file in the client command path. M661 confirms listed presence only, not stored
+size or content integrity. On this printer, an older upload-only verification
+path issued M23 and the user observed the file execute; the current path omits
+M23/M24. M601 S1 is still part of the preamble and its firmware-side effect is
+not authoritatively documented, so this is not a proven physical no-start
+guarantee. Supervise the printer during uploads until verified on your firmware.
+Use the separate `print` command to start an already-uploaded file, or pass
+`--start` to explicitly opt into printing after M661 lists the filename.
 
 Upload and start:
 
@@ -125,9 +133,9 @@ ffadv4manager --host 192.168.1.50 upload ~/Downloads/model.gcode --remote-name m
 ```
 
 With `--start`, the CLI starts the job only after the printer acknowledges upload
-completion, lists the remote path, and reports a byte total matching the bytes
-sent. If the firmware does not provide an unambiguous size, the CLI refuses to
-start. The JSONL log is appended and includes the printer's raw protocol replies.
+completion and M661 lists the uploaded filename. M661 confirms presence only;
+this workflow does not verify stored size or content integrity before starting.
+The JSONL log is appended and includes the printer's raw protocol replies.
 
 Print an existing printer-side file:
 
@@ -203,16 +211,18 @@ Useful commands confirmed:
 | `M601 S1`, `M115`, `M650`, `M119` | Acknowledged upload preamble (separate connection) |
 | `M28 <size> 0:/user/file.gcode` | Begin file upload with declared byte size and destination |
 | `M29` | Finish file upload |
-| `M23 0:/user/file.gcode` | Select and verify uploaded file |
+| `M23 0:/user/file.gcode` | Select file (only for explicit print/start actions) |
 | `M24` | Start/resume print |
 | `M25` | Pause print |
 | `M26` | Cancel/reset SD print state |
 
 Uploads require a standalone `ok` response after every preamble command, M28
 readiness, and M29 completion. Payload is sent as raw chunks followed by a 3-second
-flush delay. Verification selects the same `0:/user/<name>` path and requires
-M23 to report the exact local byte size; M661's `/data` listing is supplementary
-because its namespace may differ.
+flush delay. Upload-only checks M661 for the basename in either `/data/` or
+`0:/user/` and does not issue M23/M24. M661 confirms listed presence only, not
+stored size or content integrity. M23/M24 are reserved for explicit print/start
+actions. M115 from the investigated printer reported firmware `v2.2.4`; the
+older `v2.3.3-3.33` note is from a separate project test.
 
 ## Safety
 

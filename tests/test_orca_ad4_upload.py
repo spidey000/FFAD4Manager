@@ -28,7 +28,7 @@ class FakeClient:
             raise result
         return result
 
-    def upload(self, path):
+    def upload_and_confirm_listed(self, path):
         if self.__class__.upload_error:
             raise self.__class__.upload_error
         self.uploaded.append(path)
@@ -60,10 +60,10 @@ def test_hook_uses_config_defaults_and_preserves_final_space_path(monkeypatch, t
     assert client.uploaded == [gcode]
     assert client.printed == ["/data/generated part.gcode"]
     assert client.status_calls == 2
-    assert "Uploaded /data/generated part.gcode" in capsys.readouterr().out
+    assert "Uploaded and listed /data/generated part.gcode" in capsys.readouterr().out
 
 
-def test_explicit_hook_options_override_config_and_gcode_option_works(monkeypatch, tmp_path):
+def test_hook_without_start_only_uploads_and_confirms_listing(monkeypatch, tmp_path, capsys):
     _setup(monkeypatch, tmp_path, {"host": "stored", "port": 9000, "timeout": 5})
     FakeClient.statuses = [_status()]
     gcode = tmp_path / "option path.gcode"
@@ -72,6 +72,8 @@ def test_explicit_hook_options_override_config_and_gcode_option_works(monkeypatc
     client = FakeClient.instances[0]
     assert (client.host, client.port, client.timeout) == ("explicit", 8899, 1.5)
     assert client.uploaded == [gcode]
+    assert client.printed == []
+    assert "Uploaded and listed /data/option path.gcode" in capsys.readouterr().out
 
 
 def test_busy_printer_refuses_before_upload_unless_force(monkeypatch, tmp_path, capsys):

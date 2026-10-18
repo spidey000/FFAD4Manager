@@ -31,7 +31,7 @@ _HELP_TOPICS = {
     "camera url": "camera url [--camera-port PORT] [--camera-path PATH]\n  Print only the camera stream URL, suitable for piping. Uses the configured printer host or root --host. Defaults are port 8080 and path /?action=stream; paths are kept literally, including query strings. No network request is made.",
     "camera open": "camera open [--camera-port PORT] [--camera-path PATH]\n  Ask Python's stdlib webbrowser module to open the MJPEG URL. This depends on a usable desktop browser; headless systems may not open a browser, in which case the URL is printed with guidance. The stream is plain HTTP and has no authentication.",
     "camera snapshot": "camera snapshot OUTPUT [--camera-port PORT] [--camera-path PATH]\n  Download and save the first complete JPEG frame, bounded by the helper's response-size limit. On success prints only the saved path. Requires the camera HTTP endpoint to be reachable; no printer TCP connection is used.",
-    "upload": "upload LOCAL_FILE [--remote-name NAME] [--start] [--force] [--log-file PATH]\n  Upload a local G-code/GX file and verify it against printer storage. --start starts it only after exact remote size verification. --log-file appends timestamped printer response records as JSONL. Upload is refused when status reports an active print unless --force is supplied.",
+    "upload": "upload LOCAL_FILE [--remote-name NAME] [--start] [--force] [--log-file PATH]\n  Upload a local G-code/GX file and confirm its name appears in M661. Without --start, upload does not select or print the file; M661 does not verify size or content. --start explicitly selects and starts it after the listing check. --log-file appends timestamped printer response records as JSONL. Upload is refused when status reports an active print unless --force is supplied.",
     "print": "print REMOTE_NAME [--force]\n  Select a file already on the printer and start it. Use the printer-side name, with or without /data/. This starts a physical print. It is refused while status reports printing unless --force is supplied.",
     "pause": "pause\n  Pause the current print.",
     "resume": "resume\n  Resume the current print.",
@@ -257,11 +257,11 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 2
             response_callback = _response_logger(args.log_file) if args.log_file else _print_response
-            remote = client.upload_and_verify(
+            remote = client.upload_and_confirm_listed(
                 args.file, args.remote_name, progress=_progress,
                 response_callback=response_callback,
             )
-            print(f"\nUploaded: {remote}")
+            print(f"\nUploaded and listed: {remote}")
             if args.start:
                 print(client.print_file(remote, response_callback=response_callback))
         elif args.command == "print":

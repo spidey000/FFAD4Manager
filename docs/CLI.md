@@ -142,14 +142,19 @@ the local basename; `--remote-name NAME` selects another simple printer-side
 filename. The upload protocol sends an acknowledged M601/M115/M650/M119
 preamble on a separate connection, then sends the file size and
 `0:/user/NAME` destination in M28. It requires standalone `ok` lines for each
-preamble command, M28 readiness, and M29 completion before proceeding. After
-upload, M23 selects the same `0:/user/NAME` path; its opened filename and exact
-reported size must match the requested file and local bytes. M661 is logged as
-supplementary information because its `/data` namespace may differ. Missing or
-mismatched M23 size fails closed. `--start` starts the file only after this
-verification succeeds. Without `--start`, upload stores and verifies the file
-but does not print it; use the separate `print` command to start an uploaded
-file later. The CLI checks
+preamble command, M28 readiness, and M29 completion before proceeding. It then
+checks M661 for the uploaded basename, matching across `/data/` and `0:/user/`
+namespaces. Missing names fail closed. Upload-only never sends M23 or M24.
+M661 confirms only that the name is listed; it does not verify stored size or
+content integrity. Without `--start`, upload stores the file and confirms its
+listed presence and the client sends no M23/M24. This is a software-path
+guarantee, not a proven physical no-start guarantee: on one tested Adventurer 4
+running firmware `v2.2.4`, the user observed execution after an older
+upload-verification path sent M23. The current M661-only path avoids that
+selection, but M601 S1's firmware-side effect is not authoritatively documented;
+supervise the printer until separately verified. The `print` command selects
+and starts an uploaded file. Explicit `--start` opts into that print action after
+M661 confirms the name is listed. The CLI checks
 printer status before upload and refuses when status reports an active print,
 unless `--force` is supplied. `--force` bypasses that busy-status check; it is
 not a general safety guarantee. A local file must exist and must not be empty:
@@ -163,9 +168,10 @@ ffadv4manager upload ~/Downloads/model.gcode --force
 ffadv4manager upload ~/Downloads/model.gcode --log-file /tmp/ad4-printer.jsonl
 ```
 
-The command displays upload progress and then the resulting `0:/user/NAME`
-remote path. Preamble, M28, M29, M661, M23, and M24 replies are labeled on
-stderr. `--log-file PATH` additionally appends each response as a timestamped
+The command displays upload progress and then reports that the `0:/user/NAME`
+file is listed. Preamble, M28, M29, and M661 replies are labeled on stderr;
+M23/M24 replies occur only for explicit `--start` or the separate `print`
+command. `--log-file PATH` additionally appends each response as a timestamped
 JSON object per line; the log is not truncated. The
 remote name must be a simple filename (optionally prefixed by `/data/` for
 compatibility), not a nested path.
@@ -227,11 +233,13 @@ camera host) return `1`.
 
 `status`, `files`, `files-raw`, and `watch` are observational. Upload writes to
 printer storage; `print`, `upload --start`, `pause`, `resume`, and `cancel`
-affect a physical printer/job. Review the target and file before starting, and
-monitor the printer. Printer commands use the legacy FlashForge TCP protocol
-without encryption or authentication. Compatibility is confirmed against
-Adventurer 4 firmware `v2.3.3-3.33`; other models or firmware may behave
-differently.
+affect a physical printer/job. The upload code path without `--start` sends no
+M23/M24, but its physical no-start behavior is not guaranteed on undocumented
+firmware; review the target and supervise it. The device used in the logged
+upload investigation identified itself as Adventurer 4 firmware `v2.2.4`; older
+project notes refer to a separate `v2.3.3-3.33` test. Printer commands use the
+legacy FlashForge TCP protocol without encryption or authentication; other
+models or firmware may behave differently.
 
 ## OrcaSlicer post-processing hook
 

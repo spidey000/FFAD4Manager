@@ -212,96 +212,38 @@ def test_m29_save_error_with_ok_fails_completion(monkeypatch, tmp_path):
         FlashForgeClient("printer").upload(gcode)
 
 
-def _verified_client(monkeypatch, upload_responses, listing, selection, size):
-    responses = [[b"ok\n"] * 4, upload_responses, [listing], [selection], [size]]
+def _listed_client(monkeypatch, listing):
+    responses = [[b"ok\n"] * 4, [b"ok\n", b"ok\n"], [listing, socket.timeout()]]
     sockets = [FakeSocket(batch) for batch in responses]
     created_sockets = list(sockets)
     monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: sockets.pop(0))
     return created_sockets
 
 
-def test_upload_and_verify_requires_exact_size(monkeypatch, tmp_path):
+@pytest.mark.parametrize("listing", [b"/data/part.gcode:\n", b"0:/user/part.gcode:\n"])
+def test_upload_confirms_m661_basename_without_selection_or_start(monkeypatch, tmp_path, listing):
     gcode = tmp_path / "part.gcode"
     gcode.write_bytes(b"G1 X1\n")
-    _verified_client(
-        monkeypatch,
-        [b"ok\n", b"ok\n"],
-        b"/data/part.gcode:\n",
-        b"File opened: 0:/user/part.gcode Size: 6\nok\n",
-        b"SD printing byte 0/6\nok\n",
-    )
-    assert FlashForgeClient("printer").upload_and_verify(gcode) == "0:/user/part.gcode"
+    sockets = _listed_client(monkeypatch, listing)
+    assert FlashForgeClient("printer").upload_and_confirm_listed(gcode) == "0:/user/part.gcode"
+    sent_commands = [payload for sock in sockets for payload in sock.sent if payload.startswith(b"~")]
+    assert sent_commands == [
+        b"~M601 S1\r\n", b"~M115\r\n", b"~M650\r\n", b"~M119\r\n",
+        b"~M28 6 0:/user/part.gcode\r\n", b"~M29\r\n", b"~M661\r\n",
+    ]
 
 
-def test_upload_verification_selects_same_user_path(monkeypatch, tmp_path):
+def test_upload_fails_when_m661_omits_file_without_selection(monkeypatch, tmp_path):
     gcode = tmp_path / "part.gcode"
     gcode.write_bytes(b"G1 X1\n")
-    sockets = _verified_client(
-        monkeypatch,
-        [b"ok\n", b"ok\n"],
-        b"/data/part.gcode:\n",
-        b"File opened: part.gcode Size: 6\nok\n",
-        b"unused",
-    )
-    FlashForgeClient("printer").upload_and_verify(gcode)
-    assert sockets[3].sent == [b"~M23 0:/user/part.gcode\r\n"]
+    sockets = _listed_client(monkeypatch, b"/data/other.gcode:\n")
 
+    with pytest.raises(ProtocolError, match="M661 did not list 'part.gcode'"):
+        FlashForgeClient("printer").upload_and_confirm_listed(gcode)
 
-def test_upload_and_verify_uses_m23_size_even_when_listing_omits_file(monkeypatch, tmp_path):
-    gcode = tmp_path / "part.gcode"
-    gcode.write_bytes(b"G1 X1\n")
-    _verified_client(
-        monkeypatch,
-        [b"ok\n", b"ok\n"],
-        b"/data/other.gcode:\n",
-        b"CMD M23 Received\nFile opened: part.gcode Size: 6\nFile selected\nok\n",
-        b"SD printing byte 0/100\nok\n",
-    )
-    assert FlashForgeClient("printer").upload_and_verify(gcode) == "0:/user/part.gcode"
-
-
-@pytest.mark.parametrize(
-    ("selection", "error"),
-    [
-        (b"File opened: part.gcode Size: 5\nok\n", "size mismatch"),
-        (b"File opened: part.gcode Size: 0\nok\n", "size mismatch"),
-        (b"File opened: other.gcode Size: 6\nok\n", "instead of requested"),
-    ],
-)
-def test_upload_and_verify_rejects_bad_m23_open_details(
-    monkeypatch, tmp_path, selection, error
-):
-    gcode = tmp_path / "part.gcode"
-    gcode.write_bytes(b"G1 X1\n")
-    _verified_client(
-        monkeypatch,
-        [b"ok\n", b"ok\n"],
-        b"/data/part.gcode:\n",
-        selection,
-        b"SD printing byte 0/6\nok\n",
-    )
-    with pytest.raises(ProtocolError, match=error):
-        FlashForgeClient("printer").upload_and_verify(gcode)
-
-
-@pytest.mark.parametrize(
-    ("listing", "selection", "size", "upload_responses", "error"),
-    [
-        (b"/data/part.gcode:\n", b"File opened: part.gcode Size: 5\nok\n", b"SD printing byte 0/5\nok\n", [b"ok\n", b"ok\n"], "size mismatch"),
-        (b"/data/other.gcode:\n", b"ok\n", b"SD printing byte 0/6\nok\n", [b"ok\n", b"ok\n"], "M23 did not report the size"),
-        (b"/data/part.gcode:\n", b"ok\n", b"size unavailable\nok\n", [b"ok\n", b"ok\n"], "M23 did not report the size"),
-        (b"/data/part.gcode:\n", b"not ok\n", b"SD printing byte 0/6\n", [b"ok\n", b"ok\n"], "M23 file selection"),
-        (b"/data/part.gcode:\n", b"ok\n", b"SD printing byte 0/6\nok\n", [b"ok\n", socket.timeout()], "M29 upload completion"),
-    ],
-)
-def test_upload_and_verify_fails_closed(
-    monkeypatch, tmp_path, listing, selection, size, upload_responses, error
-):
-    gcode = tmp_path / "part.gcode"
-    gcode.write_bytes(b"G1 X1\n")
-    _verified_client(monkeypatch, upload_responses, listing, selection, size)
-    with pytest.raises(ProtocolError, match=error):
-        FlashForgeClient("printer").upload_and_verify(gcode)
+    sent_commands = [payload for sock in sockets for payload in sock.sent if payload.startswith(b"~")]
+    assert b"~M23 0:/user/part.gcode\r\n" not in sent_commands
+    assert b"~M24\r\n" not in sent_commands
 
 
 def test_print_file_requires_selection_and_start_ack(monkeypatch):

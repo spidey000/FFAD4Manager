@@ -105,8 +105,8 @@ def main(argv: list[str] | None = None) -> int:
         client = FlashForgeClient(host, port, timeout=timeout)
         if not args.force:
             _require_safe_status(client, "before upload")
-        remote = client.upload(Path(gcode))
-        print(f"Uploaded {remote}")
+        remote = client.upload_and_confirm_listed(Path(gcode))
+        print(f"Uploaded and listed {remote}")
         if args.start:
             if not args.force:
                 _require_safe_status(client, "immediately before print start")

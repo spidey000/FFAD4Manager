@@ -134,8 +134,8 @@ def test_upload_start_is_not_invoked_when_verification_fails(monkeypatch, tmp_pa
         def status(self):
             return type("Status", (), {"is_printing": False})()
 
-        def upload_and_verify(self, *_args, **_kwargs):
-            raise RuntimeError("remote file size mismatch")
+        def upload_and_confirm_listed(self, *_args, **_kwargs):
+            raise RuntimeError("uploaded file not listed")
 
         def print_file(self, *_args, **_kwargs):
             self.started = True
@@ -148,7 +148,7 @@ def test_upload_start_is_not_invoked_when_verification_fails(monkeypatch, tmp_pa
     file.write_text("G1 X1\n")
 
     assert cli.main(["--host", "printer", "upload", str(file), "--start"]) == 1
-    assert "remote file size mismatch" in capsys.readouterr().err
+    assert "uploaded file not listed" in capsys.readouterr().err
     assert not client.started
 
 
@@ -161,8 +161,8 @@ def test_successful_upload_without_start_never_calls_print_file(monkeypatch, tmp
             self.calls.append("status")
             return type("Status", (), {"is_printing": False})()
 
-        def upload_and_verify(self, *_args, **_kwargs):
-            self.calls.append("upload_and_verify")
+        def upload_and_confirm_listed(self, *_args, **_kwargs):
+            self.calls.append("upload_and_confirm_listed")
             return "0:/user/part.gcode"
 
         def print_file(self, *_args, **_kwargs):
@@ -176,8 +176,8 @@ def test_successful_upload_without_start_never_calls_print_file(monkeypatch, tmp
     file.write_text("G1 X1\n")
 
     assert cli.main(["--host", "printer", "upload", str(file)]) == 0
-    assert client.calls == ["status", "upload_and_verify"]
-    assert "Uploaded: 0:/user/part.gcode" in capsys.readouterr().out
+    assert client.calls == ["status", "upload_and_confirm_listed"]
+    assert "Uploaded and listed: 0:/user/part.gcode" in capsys.readouterr().out
 
 
 def test_explicit_start_calls_print_only_after_upload_verification(monkeypatch, tmp_path):
@@ -189,12 +189,12 @@ def test_explicit_start_calls_print_only_after_upload_verification(monkeypatch, 
             self.calls.append("status")
             return type("Status", (), {"is_printing": False})()
 
-        def upload_and_verify(self, *_args, **_kwargs):
-            self.calls.append("upload_and_verify")
+        def upload_and_confirm_listed(self, *_args, **_kwargs):
+            self.calls.append("upload_and_confirm_listed")
             return "0:/user/part.gcode"
 
         def print_file(self, remote, **_kwargs):
-            assert self.calls == ["status", "upload_and_verify"]
+            assert self.calls == ["status", "upload_and_confirm_listed"]
             self.calls.append(("print_file", remote))
             return "started"
 
@@ -205,4 +205,4 @@ def test_explicit_start_calls_print_only_after_upload_verification(monkeypatch, 
     file.write_text("G1 X1\n")
 
     assert cli.main(["--host", "printer", "upload", str(file), "--start"]) == 0
-    assert client.calls == ["status", "upload_and_verify", ("print_file", "0:/user/part.gcode")]
+    assert client.calls == ["status", "upload_and_confirm_listed", ("print_file", "0:/user/part.gcode")]

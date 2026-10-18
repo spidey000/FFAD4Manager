@@ -150,3 +150,59 @@ def test_upload_start_is_not_invoked_when_verification_fails(monkeypatch, tmp_pa
     assert cli.main(["--host", "printer", "upload", str(file), "--start"]) == 1
     assert "remote file size mismatch" in capsys.readouterr().err
     assert not client.started
+
+
+def test_successful_upload_without_start_never_calls_print_file(monkeypatch, tmp_path, capsys):
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs):
+            self.calls = []
+
+        def status(self):
+            self.calls.append("status")
+            return type("Status", (), {"is_printing": False})()
+
+        def upload_and_verify(self, *_args, **_kwargs):
+            self.calls.append("upload_and_verify")
+            return "0:/user/part.gcode"
+
+        def print_file(self, *_args, **_kwargs):
+            self.calls.append("print_file")
+            raise AssertionError("upload without --start must not start a print")
+
+    monkeypatch.setenv("FFADV4MANAGER_CONFIG", str(tmp_path / "config.ini"))
+    client = FakeClient()
+    monkeypatch.setattr(cli, "FlashForgeClient", lambda *_args, **_kwargs: client)
+    file = tmp_path / "part.gcode"
+    file.write_text("G1 X1\n")
+
+    assert cli.main(["--host", "printer", "upload", str(file)]) == 0
+    assert client.calls == ["status", "upload_and_verify"]
+    assert "Uploaded: 0:/user/part.gcode" in capsys.readouterr().out
+
+
+def test_explicit_start_calls_print_only_after_upload_verification(monkeypatch, tmp_path):
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs):
+            self.calls = []
+
+        def status(self):
+            self.calls.append("status")
+            return type("Status", (), {"is_printing": False})()
+
+        def upload_and_verify(self, *_args, **_kwargs):
+            self.calls.append("upload_and_verify")
+            return "0:/user/part.gcode"
+
+        def print_file(self, remote, **_kwargs):
+            assert self.calls == ["status", "upload_and_verify"]
+            self.calls.append(("print_file", remote))
+            return "started"
+
+    monkeypatch.setenv("FFADV4MANAGER_CONFIG", str(tmp_path / "config.ini"))
+    client = FakeClient()
+    monkeypatch.setattr(cli, "FlashForgeClient", lambda *_args, **_kwargs: client)
+    file = tmp_path / "part.gcode"
+    file.write_text("G1 X1\n")
+
+    assert cli.main(["--host", "printer", "upload", str(file), "--start"]) == 0
+    assert client.calls == ["status", "upload_and_verify", ("print_file", "0:/user/part.gcode")]

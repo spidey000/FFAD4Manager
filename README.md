@@ -113,7 +113,10 @@ ffadv4manager --host 192.168.1.50 upload ~/Downloads/model.gcode --remote-name m
 
 The input must be an existing, non-empty G-code/GX file (typically exported by a
 slicer); empty files are rejected before the upload starts. The upload command
-does not generate or slice a model.
+does not generate or slice a model. Without `--start`, it only uploads and
+verifies the file; it does not print. Use the separate `print` command to start
+an already-uploaded file, or pass `--start` to explicitly opt into starting it
+after successful verification.
 
 Upload and start:
 

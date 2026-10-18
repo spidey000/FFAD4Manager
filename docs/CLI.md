@@ -147,7 +147,9 @@ upload, M23 selects the same `0:/user/NAME` path; its opened filename and exact
 reported size must match the requested file and local bytes. M661 is logged as
 supplementary information because its `/data` namespace may differ. Missing or
 mismatched M23 size fails closed. `--start` starts the file only after this
-verification succeeds. The CLI checks
+verification succeeds. Without `--start`, upload stores and verifies the file
+but does not print it; use the separate `print` command to start an uploaded
+file later. The CLI checks
 printer status before upload and refuses when status reports an active print,
 unless `--force` is supplied. `--force` bypasses that busy-status check; it is
 not a general safety guarantee. A local file must exist and must not be empty:

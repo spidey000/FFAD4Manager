@@ -7,6 +7,11 @@ steps](../README.md#linux-cli-installation-and-use). The installed command is
 `ffadv4manager`; `ad4ctl` remains a compatibility alias to the same CLI. You can
 also run it from a checkout with `python3 -m ffadv4manager.cli`.
 
+For an evidence-qualified catalog of printer commands, G-code in the test files,
+and the distinction between TCP command framing and UDP discovery, see the
+[printer command catalog](PRINTER-COMMANDS.md). It is not an exhaustive command
+reference.
+
 Run `ffadv4manager help` for the built-in overview, `ffadv4manager help COMMAND` for a
 command's concise help, or `ffadv4manager COMMAND --help` for argparse syntax. For
 camera and config subcommands, the built-in topics include, for example,

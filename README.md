@@ -23,6 +23,10 @@ Working today:
 - UDP printer discovery, with optional JSON output
 - Camera stream URL, browser launch, and bounded JPEG snapshot (`camera snapshot`)
 
+See the [printer command and G-code evidence catalog](docs/PRINTER-COMMANDS.md)
+for device responses, implemented commands, test-file contents, and explicit
+uncertainty/safety notes. It is not an exhaustive Adventurer 4 command list.
+
 Planned CLI and protocol improvements:
 
 - Support for related FlashForge models

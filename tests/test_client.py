@@ -2,13 +2,20 @@ import socket
 
 import pytest
 
+from ffadv4manager.core import client as client_module
 from ffadv4manager.core.client import FlashForgeClient, ProtocolError
+
+
+@pytest.fixture(autouse=True)
+def skip_upload_flush_wait(monkeypatch):
+    monkeypatch.setattr(client_module.time, "sleep", lambda _seconds: None)
 
 
 class FakeSocket:
     def __init__(self, responses):
         self.responses = list(responses)
         self.sent = []
+        self.events = []
         self.timeout = None
 
     def __enter__(self):
@@ -25,6 +32,7 @@ class FakeSocket:
 
     def sendall(self, payload):
         self.sent.append(payload)
+        self.events.append(("sendall", payload))
 
     def recv(self, _size):
         response = self.responses.pop(0) if self.responses else socket.timeout()
@@ -44,6 +52,29 @@ def test_upload_allows_silent_m28_but_requires_m29_ack(monkeypatch, tmp_path):
     assert fake.sent[0] == b"~M28 /data/part.gcode\r\n"
     assert fake.sent[1] == b"G1 X1\n"
     assert fake.sent[2] == b"~M29\r\n"
+
+
+def test_upload_flushes_payload_for_three_seconds_before_m29(monkeypatch, tmp_path):
+    gcode = tmp_path / "part.gcode"
+    gcode.write_bytes(b"abcdef")
+    fake = FakeSocket([socket.timeout(), b"ok\n"])
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: fake)
+    monkeypatch.setattr(
+        client_module.time,
+        "sleep",
+        lambda seconds: fake.events.append(("sleep", seconds)),
+    )
+
+    assert FlashForgeClient("printer").upload(gcode, chunk_size=2) == "/data/part.gcode"
+
+    assert fake.events == [
+        ("sendall", b"~M28 /data/part.gcode\r\n"),
+        ("sendall", b"ab"),
+        ("sendall", b"cd"),
+        ("sendall", b"ef"),
+        ("sleep", 3.0),
+        ("sendall", b"~M29\r\n"),
+    ]
 
 
 def test_upload_rejects_empty_file_before_connect(monkeypatch, tmp_path):

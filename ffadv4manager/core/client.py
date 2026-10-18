@@ -15,6 +15,7 @@ ResponseCallback = Callable[[str, str], None]
 M661_TIMEOUT = 12.0
 M661_IDLE_TIMEOUT = 0.3
 M661_MAX_BYTES = 1_048_576
+UPLOAD_FLUSH_DELAY = 3.0
 
 
 class ProtocolError(RuntimeError):
@@ -101,6 +102,7 @@ class FlashForgeClient:
                     f"local file changed during upload: expected {total} bytes, sent {sent}"
                 )
 
+            time.sleep(UPLOAD_FLUSH_DELAY)
             self._send_command(sock, "M29")
             m29_response = self._read_response(sock, 20.0)
             _report_response(response_callback, "M29", m29_response)

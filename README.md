@@ -197,12 +197,19 @@ Useful commands confirmed:
 | `M105` | Temperature state |
 | `M27` | Print progress |
 | `M661` | File listing |
-| `M28 /data/file.gcode` | Begin file upload |
+| `M601 S1`, `M115`, `M650`, `M119` | Acknowledged upload preamble (separate connection) |
+| `M28 <size> 0:/user/file.gcode` | Begin file upload with declared byte size and destination |
 | `M29` | Finish file upload |
-| `M23 /data/file.gcode` | Select file |
+| `M23 0:/user/file.gcode` | Select and verify uploaded file |
 | `M24` | Start/resume print |
 | `M25` | Pause print |
 | `M26` | Cancel/reset SD print state |
+
+Uploads require a standalone `ok` response after every preamble command, M28
+readiness, and M29 completion. Payload is sent as raw chunks followed by a 3-second
+flush delay. Verification selects the same `0:/user/<name>` path and requires
+M23 to report the exact local byte size; M661's `/data` listing is supplementary
+because its namespace may differ.
 
 ## Safety
 

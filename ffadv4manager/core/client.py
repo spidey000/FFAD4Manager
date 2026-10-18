@@ -16,6 +16,8 @@ M661_TIMEOUT = 12.0
 M661_IDLE_TIMEOUT = 0.3
 M661_MAX_BYTES = 1_048_576
 UPLOAD_FLUSH_DELAY = 3.0
+UPLOAD_ACK_TIMEOUT = 20.0
+UPLOAD_PREAMBLE = ("M601 S1", "M115", "M650", "M119")
 
 
 class ProtocolError(RuntimeError):
@@ -26,8 +28,9 @@ class FlashForgeClient:
     """Small TCP client for legacy FlashForge printers on port 8899.
 
     Confirmed against a FlashForge Adventurer 4 firmware v2.3.3-3.33.
-    Commands are sent as `~GCODE\r\n`. File upload is performed on the same
-    socket after `M28 /data/name.gcode` and completed with `M29`.
+    Commands are sent as `~GCODE\r\n`. Upload follows the AD4 sender protocol:
+    a separate acknowledged preamble, then `M28 <size> 0:/user/name`, payload,
+    and `M29` on the upload socket.
     """
 
     def __init__(self, host: str, port: int = 8899, timeout: float = 8.0) -> None:
@@ -79,13 +82,14 @@ class FlashForgeClient:
             raise ValueError(f"local file must not be empty: {path}")
         sent = 0
 
-        with self._connect(timeout=max(self.timeout, 30.0)) as sock:
-            self._send_command(sock, f"M28 {remote_path}")
-            # Some printers reply before data, some stay quiet until M29. Read briefly only.
-            m28_response = self._read_available(sock, 0.5)
+        self._send_upload_preamble(response_callback)
+        upload_path = _upload_remote_path(remote)
+
+        with self._connect(timeout=max(self.timeout, UPLOAD_ACK_TIMEOUT)) as sock:
+            self._send_command(sock, f"M28 {total} {upload_path}")
+            m28_response = self._read_until_exact_ok(sock, UPLOAD_ACK_TIMEOUT)
             _report_response(response_callback, "M28", m28_response)
-            if m28_response.strip():
-                _require_ack("M28 upload start", m28_response, command="M28")
+            _require_exact_ok("M28 upload start", m28_response)
 
             with path.open("rb") as fh:
                 while True:
@@ -104,11 +108,19 @@ class FlashForgeClient:
 
             time.sleep(UPLOAD_FLUSH_DELAY)
             self._send_command(sock, "M29")
-            m29_response = self._read_response(sock, 20.0)
+            m29_response = self._read_until_exact_ok(sock, UPLOAD_ACK_TIMEOUT)
             _report_response(response_callback, "M29", m29_response)
-            _require_ack("M29 upload completion", m29_response)
+            _require_exact_ok("M29 upload completion", m29_response)
 
-        return remote_path
+        return upload_path
+
+    def _send_upload_preamble(self, response_callback: ResponseCallback | None) -> None:
+        with self._connect(timeout=max(self.timeout, UPLOAD_ACK_TIMEOUT)) as sock:
+            for gcode in UPLOAD_PREAMBLE:
+                self._send_command(sock, gcode)
+                response = self._read_until_exact_ok(sock, UPLOAD_ACK_TIMEOUT)
+                _report_response(response_callback, gcode.split()[0], response)
+                _require_exact_ok(f"{gcode} preamble", response)
 
     def upload_and_verify(
         self,
@@ -128,7 +140,8 @@ class FlashForgeClient:
         listing = self.files_raw()
         _report_response(response_callback, "M661", listing)
 
-        selected = self.command(f"M23 {remote_path}")
+        upload_path = _upload_remote_path(remote_path.rsplit("/", 1)[-1])
+        selected = self.command(f"M23 {upload_path}")
         _report_response(response_callback, "M23", selected)
         _require_ack("M23 file selection", selected)
 
@@ -163,27 +176,9 @@ class FlashForgeClient:
                 raise ProtocolError(
                     f"remote file size mismatch for {remote_path}: expected {expected_size} bytes, printer reports {remote_size}"
                 )
-            return remote_path
+            return upload_path
 
-        if remote_path not in parse_file_list(listing):
-            raise ProtocolError(f"uploaded file {remote_path} is absent from printer file list and M23 gave no size")
-
-        size_response = self.command("M27")
-        _report_response(response_callback, "M27", size_response)
-        _require_ack("M27 file size query", size_response)
-        matches = re.findall(
-            r"\bSD printing byte\s+(\d+)\s*/\s*(\d+)\b",
-            size_response,
-            re.IGNORECASE,
-        )
-        if len(matches) != 1:
-            raise ProtocolError("printer did not report an unambiguous M27 total byte size after file selection")
-        remote_size = int(matches[0][1])
-        if remote_size != expected_size:
-            raise ProtocolError(
-                f"remote file size mismatch for {remote_path}: expected {expected_size} bytes, printer reports {remote_size}"
-            )
-        return remote_path
+        raise ProtocolError(f"M23 did not report the size of uploaded file {upload_path}")
 
     def print_file(
         self, remote_name: str, response_callback: ResponseCallback | None = None
@@ -256,6 +251,25 @@ class FlashForgeClient:
         return b"".join(chunks).decode("utf-8", errors="replace")
 
     @staticmethod
+    def _read_until_exact_ok(sock: socket.socket, timeout: float) -> str:
+        sock.settimeout(timeout)
+        deadline = time.monotonic() + timeout
+        chunks: list[bytes] = []
+        while time.monotonic() < deadline:
+            sock.settimeout(max(0.001, deadline - time.monotonic()))
+            try:
+                data = sock.recv(8192)
+            except socket.timeout:
+                break
+            if not data:
+                break
+            chunks.append(data)
+            text = b"".join(chunks).decode("utf-8", errors="replace")
+            if any(line.strip() == "ok" for line in text.splitlines()):
+                return text
+        return b"".join(chunks).decode("utf-8", errors="replace")
+
+    @staticmethod
     def _read_until_idle(
         sock: socket.socket,
         timeout: float,
@@ -293,6 +307,10 @@ def _validated_remote_path(remote_name: str) -> str:
         basename = remote_name[len("/data/"):]
         if not basename or "/" in basename or "\\" in basename:
             raise ValueError("remote path must be a filename in /data, not a nested path")
+    elif remote_name.startswith("0:/user/"):
+        basename = remote_name[len("0:/user/"):]
+        if not basename or "/" in basename or "\\" in basename:
+            raise ValueError("remote path must be a filename in 0:/user, not a nested path")
     else:
         basename = remote_name
         if "/" in basename or "\\" in basename:
@@ -300,7 +318,14 @@ def _validated_remote_path(remote_name: str) -> str:
 
     if basename in {".", ".."}:
         raise ValueError("remote filename must not be a traversal path")
+    if remote_name.startswith("0:/user/"):
+        return f"0:/user/{basename}"
     return f"/data/{basename}"
+
+
+def _upload_remote_path(remote_name: str) -> str:
+    basename = remote_name.rsplit("/", 1)[-1]
+    return f"0:/user/{basename}"
 
 
 def _report_response(callback: ResponseCallback | None, command: str, response: str) -> None:
@@ -335,3 +360,10 @@ def _require_ack(action: str, response: str, command: str | None = None) -> None
     )
     if not _has_positive_ack(response) and not has_command_receipt:
         raise ProtocolError(f"printer did not acknowledge {action}: {_response_detail(response)}")
+
+
+def _require_exact_ok(action: str, response: str) -> None:
+    if _is_rejection(response):
+        raise ProtocolError(f"printer rejected {action}: {_response_detail(response)}")
+    if not any(line.strip() == "ok" for line in response.splitlines()):
+        raise ProtocolError(f"printer did not acknowledge {action} with standalone ok: {_response_detail(response)}")

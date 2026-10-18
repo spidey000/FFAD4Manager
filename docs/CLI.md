@@ -139,13 +139,15 @@ no HTTP authentication or encryption; use it only on a trusted network.
 
 Upload a local G-code/GX file to printer storage. By default, the remote name is
 the local basename; `--remote-name NAME` selects another simple printer-side
-filename. Every upload requires the M29 completion acknowledgement, selects
-the uploaded file, and compares the printer-reported file size with the bytes
-sent. A size reported by M23 is authoritative; if M23 omits it, verification
-requires the exact path in M661 and an unambiguous M27 total. M23's opened
-filename must match the requested file. If verification data is unavailable or
-does not match, verification fails closed. `--start` starts the file only after
-this verification succeeds. The CLI checks
+filename. The upload protocol sends an acknowledged M601/M115/M650/M119
+preamble on a separate connection, then sends the file size and
+`0:/user/NAME` destination in M28. It requires standalone `ok` lines for each
+preamble command, M28 readiness, and M29 completion before proceeding. After
+upload, M23 selects the same `0:/user/NAME` path; its opened filename and exact
+reported size must match the requested file and local bytes. M661 is logged as
+supplementary information because its `/data` namespace may differ. Missing or
+mismatched M23 size fails closed. `--start` starts the file only after this
+verification succeeds. The CLI checks
 printer status before upload and refuses when status reports an active print,
 unless `--force` is supplied. `--force` bypasses that busy-status check; it is
 not a general safety guarantee. A local file must exist and must not be empty:
@@ -159,17 +161,18 @@ ffadv4manager upload ~/Downloads/model.gcode --force
 ffadv4manager upload ~/Downloads/model.gcode --log-file /tmp/ad4-printer.jsonl
 ```
 
-The command displays upload progress and then the resulting remote path. Raw
-M28, M29, M661, M23, and M27 replies (and M23/M24 start replies) are labeled on
+The command displays upload progress and then the resulting `0:/user/NAME`
+remote path. Preamble, M28, M29, M661, M23, and M24 replies are labeled on
 stderr. `--log-file PATH` additionally appends each response as a timestamped
 JSON object per line; the log is not truncated. The
-remote name must be a simple filename (optionally prefixed by `/data/`), not a
-nested path.
+remote name must be a simple filename (optionally prefixed by `/data/` for
+compatibility), not a nested path.
 
 ### `print`
 
 Select and start a file that is already stored on the printer. Supply its
-printer-side name, with or without the `/data/` prefix. It checks status and
+printer-side name, with or without the `/data/` prefix; the upload namespace
+`0:/user/NAME` is also accepted. It checks status and
 refuses when the printer reports printing unless `--force` is given.
 
 ```sh

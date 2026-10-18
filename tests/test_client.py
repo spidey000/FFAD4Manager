@@ -41,34 +41,37 @@ class FakeSocket:
         return response
 
 
-def test_upload_allows_silent_m28_but_requires_m29_ack(monkeypatch, tmp_path):
+def test_upload_preamble_order_and_size_path_with_fragmented_acknowledgements(monkeypatch, tmp_path):
     gcode = tmp_path / "part.gcode"
     gcode.write_bytes(b"G1 X1\n")
-    fake = FakeSocket([socket.timeout(), b"ok\n"])
-    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: fake)
+    console = FakeSocket([b"prefix\r\n", b"o", b"k\r\n", b"ok\n", b"ok\n", b"ok\n"])
+    upload = FakeSocket([b"CMD M28 Received.\r\no", b"k\r\n", b"o", b"k\n"])
+    sockets = [console, upload]
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: sockets.pop(0))
     client = FlashForgeClient("printer")
 
-    assert client.upload(gcode) == "/data/part.gcode"
-    assert fake.sent[0] == b"~M28 /data/part.gcode\r\n"
-    assert fake.sent[1] == b"G1 X1\n"
-    assert fake.sent[2] == b"~M29\r\n"
+    assert client.upload(gcode) == "0:/user/part.gcode"
+    assert console.sent == [b"~M601 S1\r\n", b"~M115\r\n", b"~M650\r\n", b"~M119\r\n"]
+    assert upload.sent == [b"~M28 6 0:/user/part.gcode\r\n", b"G1 X1\n", b"~M29\r\n"]
 
 
 def test_upload_flushes_payload_for_three_seconds_before_m29(monkeypatch, tmp_path):
     gcode = tmp_path / "part.gcode"
     gcode.write_bytes(b"abcdef")
-    fake = FakeSocket([socket.timeout(), b"ok\n"])
-    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: fake)
+    console = FakeSocket([b"ok\n"] * 4)
+    upload = FakeSocket([b"ok\n", b"ok\n"])
+    sockets = [console, upload]
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: sockets.pop(0))
     monkeypatch.setattr(
         client_module.time,
         "sleep",
-        lambda seconds: fake.events.append(("sleep", seconds)),
+        lambda seconds: upload.events.append(("sleep", seconds)),
     )
 
-    assert FlashForgeClient("printer").upload(gcode, chunk_size=2) == "/data/part.gcode"
+    assert FlashForgeClient("printer").upload(gcode, chunk_size=2) == "0:/user/part.gcode"
 
-    assert fake.events == [
-        ("sendall", b"~M28 /data/part.gcode\r\n"),
+    assert upload.events == [
+        ("sendall", b"~M28 6 0:/user/part.gcode\r\n"),
         ("sendall", b"ab"),
         ("sendall", b"cd"),
         ("sendall", b"ef"),
@@ -93,7 +96,7 @@ def test_upload_rejects_empty_file_before_connect(monkeypatch, tmp_path):
 def test_upload_rejects_file_that_grows_during_transfer(monkeypatch, tmp_path):
     gcode = tmp_path / "part.gcode"
     gcode.write_bytes(b"G1 X1\n")
-    fake = FakeSocket([socket.timeout(), b"ok\n"])
+    fake = FakeSocket([b"ok\n"] * 4 + [b"ok\n", b"ok\n"])
     sendall = fake.sendall
 
     def send_and_grow(payload):
@@ -137,36 +140,84 @@ def test_files_collects_chunks_after_m661_ack(monkeypatch):
     ]
 
 
-def test_upload_accepts_flashforge_m28_received_ack(monkeypatch, tmp_path):
+def test_m28_command_receipt_without_exact_ok_aborts_before_payload_or_m29(monkeypatch, tmp_path):
     gcode = tmp_path / "part.gcode"
     gcode.write_bytes(b"G1 X1\n")
-    fake = FakeSocket([b"CMD M28 Received.\r\n", socket.timeout(), b"ok\n"])
-    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: fake)
+    console = FakeSocket([b"ok\n"] * 4)
+    upload = FakeSocket([b"CMD M28 Received.\r\n"])
+    sockets = [console, upload]
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: sockets.pop(0))
 
-    assert FlashForgeClient("printer").upload(gcode) == "/data/part.gcode"
-    assert fake.sent[0] == b"~M28 /data/part.gcode\r\n"
-    assert fake.sent[-1] == b"~M29\r\n"
+    with pytest.raises(ProtocolError, match="M28 upload start"):
+        FlashForgeClient("printer").upload(gcode)
+    assert upload.sent == [b"~M28 6 0:/user/part.gcode\r\n"]
 
 
-def test_upload_rejects_m28_and_missing_m29_ack(monkeypatch, tmp_path):
+def test_m28_error_with_ok_aborts_before_payload_or_m29(monkeypatch, tmp_path):
+    gcode = tmp_path / "part.gcode"
+    gcode.write_bytes(b"G1 X1\n")
+    console = FakeSocket([b"ok\n"] * 4)
+    upload = FakeSocket([b"Error: cannot open file\r\nok\r\n"])
+    sockets = [console, upload]
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: sockets.pop(0))
+
+    with pytest.raises(ProtocolError, match="rejected M28 upload start: Error: cannot open file"):
+        FlashForgeClient("printer").upload(gcode)
+    assert upload.sent == [b"~M28 6 0:/user/part.gcode\r\n"]
+
+
+def test_upload_missing_preamble_ack_fails_before_upload_connection(monkeypatch, tmp_path):
     gcode = tmp_path / "part.gcode"
     gcode.write_bytes(b"G1 X1")
-    rejected = FakeSocket([b"Error: cannot open file\n"])
-    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: rejected)
-    with pytest.raises(ProtocolError, match="M28"):
+    console = FakeSocket([b"ok\n", b"not ready\n"])
+    sockets = [console]
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: sockets.pop(0))
+    with pytest.raises(ProtocolError, match="M115 preamble"):
         FlashForgeClient("printer").upload(gcode)
-    assert len(rejected.sent) == 1
+    assert console.sent == [b"~M601 S1\r\n", b"~M115\r\n"]
+    assert sockets == []
 
-    missing_ack = FakeSocket([socket.timeout(), socket.timeout()])
-    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: missing_ack)
+
+def test_upload_preamble_timeout_fails_closed(monkeypatch, tmp_path):
+    gcode = tmp_path / "part.gcode"
+    gcode.write_bytes(b"G1 X1")
+    console = FakeSocket([socket.timeout()])
+    sockets = [console]
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: sockets.pop(0))
+    with pytest.raises(ProtocolError, match="M601 S1 preamble"):
+        FlashForgeClient("printer").upload(gcode)
+    assert console.sent == [b"~M601 S1\r\n"]
+    assert sockets == []
+
+def test_upload_missing_m29_ack_fails_closed(monkeypatch, tmp_path):
+    gcode = tmp_path / "part.gcode"
+    gcode.write_bytes(b"G1 X1")
+    console = FakeSocket([b"ok\n"] * 4)
+    upload = FakeSocket([b"ok\n", socket.timeout()])
+    sockets = [console, upload]
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: sockets.pop(0))
     with pytest.raises(ProtocolError, match="M29 upload completion"):
         FlashForgeClient("printer").upload(gcode)
 
 
-def _verified_client(monkeypatch, upload_responses, listing, selection, size):
-    responses = [upload_responses, [listing], [selection], [size]]
-    sockets = [FakeSocket(batch) for batch in responses]
+def test_m29_save_error_with_ok_fails_completion(monkeypatch, tmp_path):
+    gcode = tmp_path / "part.gcode"
+    gcode.write_bytes(b"G1 X1")
+    console = FakeSocket([b"ok\n"] * 4)
+    upload = FakeSocket([b"ok\n", b"Error: failed to save file\r\nok\r\n"])
+    sockets = [console, upload]
     monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: sockets.pop(0))
+
+    with pytest.raises(ProtocolError, match="rejected M29 upload completion: Error: failed to save file"):
+        FlashForgeClient("printer").upload(gcode)
+
+
+def _verified_client(monkeypatch, upload_responses, listing, selection, size):
+    responses = [[b"ok\n"] * 4, upload_responses, [listing], [selection], [size]]
+    sockets = [FakeSocket(batch) for batch in responses]
+    created_sockets = list(sockets)
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: sockets.pop(0))
+    return created_sockets
 
 
 def test_upload_and_verify_requires_exact_size(monkeypatch, tmp_path):
@@ -174,12 +225,26 @@ def test_upload_and_verify_requires_exact_size(monkeypatch, tmp_path):
     gcode.write_bytes(b"G1 X1\n")
     _verified_client(
         monkeypatch,
-        [socket.timeout(), b"ok\n"],
+        [b"ok\n", b"ok\n"],
         b"/data/part.gcode:\n",
-        b"ok\n",
+        b"File opened: 0:/user/part.gcode Size: 6\nok\n",
         b"SD printing byte 0/6\nok\n",
     )
-    assert FlashForgeClient("printer").upload_and_verify(gcode) == "/data/part.gcode"
+    assert FlashForgeClient("printer").upload_and_verify(gcode) == "0:/user/part.gcode"
+
+
+def test_upload_verification_selects_same_user_path(monkeypatch, tmp_path):
+    gcode = tmp_path / "part.gcode"
+    gcode.write_bytes(b"G1 X1\n")
+    sockets = _verified_client(
+        monkeypatch,
+        [b"ok\n", b"ok\n"],
+        b"/data/part.gcode:\n",
+        b"File opened: part.gcode Size: 6\nok\n",
+        b"unused",
+    )
+    FlashForgeClient("printer").upload_and_verify(gcode)
+    assert sockets[3].sent == [b"~M23 0:/user/part.gcode\r\n"]
 
 
 def test_upload_and_verify_uses_m23_size_even_when_listing_omits_file(monkeypatch, tmp_path):
@@ -187,12 +252,12 @@ def test_upload_and_verify_uses_m23_size_even_when_listing_omits_file(monkeypatc
     gcode.write_bytes(b"G1 X1\n")
     _verified_client(
         monkeypatch,
-        [socket.timeout(), b"ok\n"],
+        [b"ok\n", b"ok\n"],
         b"/data/other.gcode:\n",
         b"CMD M23 Received\nFile opened: part.gcode Size: 6\nFile selected\nok\n",
         b"SD printing byte 0/100\nok\n",
     )
-    assert FlashForgeClient("printer").upload_and_verify(gcode) == "/data/part.gcode"
+    assert FlashForgeClient("printer").upload_and_verify(gcode) == "0:/user/part.gcode"
 
 
 @pytest.mark.parametrize(
@@ -210,7 +275,7 @@ def test_upload_and_verify_rejects_bad_m23_open_details(
     gcode.write_bytes(b"G1 X1\n")
     _verified_client(
         monkeypatch,
-        [socket.timeout(), b"ok\n"],
+        [b"ok\n", b"ok\n"],
         b"/data/part.gcode:\n",
         selection,
         b"SD printing byte 0/6\nok\n",
@@ -222,11 +287,11 @@ def test_upload_and_verify_rejects_bad_m23_open_details(
 @pytest.mark.parametrize(
     ("listing", "selection", "size", "upload_responses", "error"),
     [
-        (b"/data/part.gcode:\n", b"ok\n", b"SD printing byte 0/5\nok\n", [socket.timeout(), b"ok\n"], "size mismatch"),
-        (b"/data/other.gcode:\n", b"ok\n", b"SD printing byte 0/6\nok\n", [socket.timeout(), b"ok\n"], "absent"),
-        (b"/data/part.gcode:\n", b"ok\n", b"size unavailable\nok\n", [socket.timeout(), b"ok\n"], "unambiguous M27"),
-        (b"/data/part.gcode:\n", b"ok\n", b"SD printing byte 0/6\n", [socket.timeout(), b"ok\n"], "M27 file size query"),
-        (b"/data/part.gcode:\n", b"ok\n", b"SD printing byte 0/6\nok\n", [socket.timeout(), socket.timeout()], "M29 upload completion"),
+        (b"/data/part.gcode:\n", b"File opened: part.gcode Size: 5\nok\n", b"SD printing byte 0/5\nok\n", [b"ok\n", b"ok\n"], "size mismatch"),
+        (b"/data/other.gcode:\n", b"ok\n", b"SD printing byte 0/6\nok\n", [b"ok\n", b"ok\n"], "M23 did not report the size"),
+        (b"/data/part.gcode:\n", b"ok\n", b"size unavailable\nok\n", [b"ok\n", b"ok\n"], "M23 did not report the size"),
+        (b"/data/part.gcode:\n", b"not ok\n", b"SD printing byte 0/6\n", [b"ok\n", b"ok\n"], "M23 file selection"),
+        (b"/data/part.gcode:\n", b"ok\n", b"SD printing byte 0/6\nok\n", [b"ok\n", socket.timeout()], "M29 upload completion"),
     ],
 )
 def test_upload_and_verify_fails_closed(
@@ -258,6 +323,16 @@ def test_print_file_requires_selection_and_start_ack(monkeypatch):
         client.print_file("part.gcode")
 
 
+def test_print_file_accepts_uploaded_user_namespace(monkeypatch):
+    fake = FakeSocket([b"ok\n"])
+    start = FakeSocket([b"ok\n"])
+    sockets = [fake, start]
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: sockets.pop(0))
+    assert FlashForgeClient("printer").print_file("0:/user/part.gcode") == "ok\n\nok\n"
+    assert fake.sent == [b"~M23 0:/user/part.gcode\r\n"]
+    assert start.sent == [b"~M24\r\n"]
+
+
 @pytest.mark.parametrize(
     "name",
     ["", "../part.gcode", "folder/part.gcode", "/tmp/part.gcode", "/data/nested/part.gcode", "bad\rname", "bad\nname", "bad\x00name", "bad\\name"],
@@ -281,9 +356,9 @@ def test_upload_and_print_reject_unsafe_remote_names_before_connect(monkeypatch,
 def test_remote_names_allow_simple_unicode_spaces_and_explicit_data_path(monkeypatch, tmp_path):
     gcode = tmp_path / "source.gcode"
     gcode.write_text("G1")
-    first = FakeSocket([socket.timeout(), b"ok\n"])
-    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: first)
-    assert FlashForgeClient("printer").upload(gcode, "my part – café.gcode") == "/data/my part – café.gcode"
+    sockets = [FakeSocket([b"ok\n"] * 4), FakeSocket([b"ok\n", b"ok\n"])]
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: sockets.pop(0))
+    assert FlashForgeClient("printer").upload(gcode, "my part – café.gcode") == "0:/user/my part – café.gcode"
 
     sockets = [FakeSocket([b"ok\n"]), FakeSocket([b"ok\n"])]
     monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: sockets.pop(0))

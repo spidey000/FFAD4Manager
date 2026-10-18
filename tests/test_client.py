@@ -124,6 +124,7 @@ def test_files_collects_chunks_after_m661_ack(monkeypatch):
     client = FlashForgeClient("printer")
     raw = client.files_raw()
 
+    assert fake.sent == [b"~M661\r\n"]
     assert "/data/first.gcode" in raw
     assert "/data/second.gcode" in raw
     assert "/data/third.gcode" in raw
@@ -133,11 +134,50 @@ def test_files_collects_chunks_after_m661_ack(monkeypatch):
         b"/data/first.gcode:\x01metadata\n/data/second.",
         b"gcode:\x01metadata\n/data/third.gcode:\x01metadata\n",
     ]
+    fake.sent.clear()
     assert client.files() == [
         "/data/first.gcode",
         "/data/second.gcode",
         "/data/third.gcode",
     ]
+    assert fake.sent == [b"~M661\r\n"]
+
+
+def test_status_sends_m119_m105_m27_in_order_and_parses_response(monkeypatch):
+    sockets = [
+        FakeSocket([b"MachineStatus: READY\r\nMoveMode: READY\r\nCurrentFile: \r\nok\r\n"]),
+        FakeSocket([b"T0:205/210 B:60/60\r\nok\r\n"]),
+        FakeSocket([b"SD printing byte 125/500\r\nLayer: 2/4\r\nok\r\n"]),
+    ]
+    created_sockets = list(sockets)
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: sockets.pop(0))
+
+    status = FlashForgeClient("printer").status()
+
+    assert [sock.sent for sock in created_sockets] == [
+        [b"~M119\r\n"], [b"~M105\r\n"], [b"~M27\r\n"],
+    ]
+    assert status.machine_status == "READY"
+    assert status.nozzle_current == 205
+    assert status.nozzle_target == 210
+    assert status.bed_current == 60
+    assert status.bed_target == 60
+    assert status.sd_current == 125
+    assert status.sd_total == 500
+    assert status.layer_current == 2
+    assert status.layer_total == 4
+
+
+@pytest.mark.parametrize(
+    ("method_name", "command"),
+    [("pause", "M25"), ("resume", "M24"), ("cancel", "M26")],
+)
+def test_pause_resume_cancel_serialize_expected_commands(monkeypatch, method_name, command):
+    fake = FakeSocket([b"ok\n"])
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: fake)
+
+    assert getattr(FlashForgeClient("printer"), method_name)() == "ok\n"
+    assert fake.sent == [f"~{command}\r\n".encode()]
 
 
 def test_m28_command_receipt_without_exact_ok_aborts_before_payload_or_m29(monkeypatch, tmp_path):

@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from ffadv4manager.core.models import PrinterStatus
 from ffadv4manager.core.discovery import DiscoveredPrinter
 from ffadv4manager import cli
 from ffadv4manager import config as config_store
@@ -206,3 +207,59 @@ def test_explicit_start_calls_print_only_after_upload_verification(monkeypatch, 
 
     assert cli.main(["--host", "printer", "upload", str(file), "--start"]) == 0
     assert client.calls == ["status", "upload_and_confirm_listed", ("print_file", "0:/user/part.gcode")]
+
+
+@pytest.mark.parametrize(
+    ("command_args", "expected_calls"),
+    [
+        (["status"], ["status"]),
+        (["files"], ["files"]),
+        (["files-raw"], ["files_raw"]),
+        (["print", "part.gcode"], ["status", ("print_file", "part.gcode")]),
+        (["pause"], ["pause"]),
+        (["resume"], ["resume"]),
+        (["cancel"], ["cancel"]),
+    ],
+)
+def test_cli_dispatches_printer_commands_to_intended_client_methods(
+    monkeypatch, tmp_path, capsys, command_args, expected_calls
+):
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs):
+            self.calls = []
+
+        def status(self):
+            self.calls.append("status")
+            return PrinterStatus(raw="", machine_status="READY")
+
+        def files(self):
+            self.calls.append("files")
+            return ["/data/part.gcode"]
+
+        def files_raw(self):
+            self.calls.append("files_raw")
+            return "/data/part.gcode:\n"
+
+        def print_file(self, remote):
+            self.calls.append(("print_file", remote))
+            return "print started"
+
+        def pause(self):
+            self.calls.append("pause")
+            return "pause reply"
+
+        def resume(self):
+            self.calls.append("resume")
+            return "resume reply"
+
+        def cancel(self):
+            self.calls.append("cancel")
+            return "cancel reply"
+
+    monkeypatch.setenv("FFADV4MANAGER_CONFIG", str(tmp_path / "config.ini"))
+    client = FakeClient()
+    monkeypatch.setattr(cli, "FlashForgeClient", lambda *_args, **_kwargs: client)
+
+    assert cli.main(["--host", "printer", *command_args]) == 0
+    assert client.calls == expected_calls
+    capsys.readouterr()

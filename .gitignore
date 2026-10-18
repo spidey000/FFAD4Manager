@@ -7,6 +7,11 @@ build/
 .DS_Store
 .pytest_cache/
 .ruff_cache/
+AGENTS.md
+/config.ini
+/ffadv4manager/config.ini
+/.config/ffadv4manager/config.ini
+/.ffadv4manager/config.ini
 
 # Swift / SwiftPM (macos app)
 .build/

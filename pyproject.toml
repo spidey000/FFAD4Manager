@@ -3,13 +3,13 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ad4connect"
+name = "ffadv4manager"
 version = "0.2.0"
 description = "Command-line and library tooling for FlashForge Adventurer 3/4 network control"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "AD4Connect Contributors" }]
+authors = [{ name = "FFADV4Manager Contributors" }]
 keywords = ["flashforge", "adventurer", "3d-printing", "gcode"]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -20,11 +20,12 @@ classifiers = [
 ]
 
 [project.scripts]
-ad4ctl = "ad4ctl.cli:main"
+ffadv4manager = "ffadv4manager.cli:main"
+ad4ctl = "ffadv4manager.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["ad4core*", "ad4ctl*"]
+include = ["ffadv4manager*"]
 
 [tool.ruff]
 line-length = 100

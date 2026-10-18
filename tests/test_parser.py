@@ -1,4 +1,4 @@
-from ad4core.parser import parse_file_list, parse_status
+from ffadv4manager.core.parser import parse_file_list, parse_status
 
 
 def test_parse_status():

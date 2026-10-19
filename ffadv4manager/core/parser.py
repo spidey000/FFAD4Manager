@@ -6,6 +6,7 @@ from .models import PrinterStatus
 _TEMP_RE = re.compile(r"T0:(-?\d+)/(\d+)\s+B:(-?\d+)/(\d+)")
 _SD_RE = re.compile(r"SD printing byte\s+(\d+)/(\d+)")
 _LAYER_RE = re.compile(r"Layer:\s*(\d+)/(\d+)")
+_POSITION_RE = re.compile(r"\b([XYZABCE]):\s*(-?\d+(?:\.\d+)?)", re.IGNORECASE)
 
 
 def parse_status(*responses: str) -> PrinterStatus:
@@ -54,6 +55,25 @@ def parse_file_list(response: str) -> list[str]:
         if name and name not in cleaned:
             cleaned.append(name)
     return cleaned
+
+
+def parse_info(response: str) -> dict[str, str]:
+    """Parse the key/value lines commonly returned by M115 without assuming fields."""
+    result: dict[str, str] = {}
+    for line in response.splitlines():
+        line = line.strip()
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key, value = key.strip(), value.strip()
+        if key and value:
+            result[key] = value
+    return result
+
+
+def parse_position(response: str) -> dict[str, float]:
+    """Parse reported axes from M114; axes absent from the response stay absent."""
+    return {axis.upper(): float(value) for axis, value in _POSITION_RE.findall(response)}
 
 
 def _value_after(text: str, prefix: str) -> str | None:

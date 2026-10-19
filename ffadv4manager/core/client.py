@@ -8,13 +8,14 @@ from pathlib import Path
 from typing import Callable
 
 from .models import PrinterStatus
-from .parser import parse_file_list, parse_status
+from .parser import parse_file_list, parse_info, parse_position, parse_status
 
 ProgressCallback = Callable[[int, int], None]
 ResponseCallback = Callable[[str, str], None]
 M661_TIMEOUT = 12.0
 M661_IDLE_TIMEOUT = 0.3
 M661_MAX_BYTES = 1_048_576
+M662_MAX_BYTES = 16_777_216
 UPLOAD_FLUSH_DELAY = 3.0
 UPLOAD_ACK_TIMEOUT = 20.0
 UPLOAD_PREAMBLE = ("M601 S1", "M115", "M650", "M119")
@@ -50,6 +51,44 @@ class FlashForgeClient:
             self.command("M105"),
             self.command("M27"),
         )
+
+    def info(self) -> dict[str, str]:
+        """Return key/value fields reported by M115; firmware fields vary by model."""
+        return parse_info(self.command("M115"))
+
+    def position(self) -> dict[str, float]:
+        return parse_position(self.command("M114"))
+
+    def preview_bmp(self, remote_name: str) -> bytes:
+        """Fetch the M662 BMP preview, requiring its ACK and complete BMP payload.
+
+        The printer's preview response is binary. The BMP's declared file size is
+        used to delimit it; responses without a preceding standalone ACK, a valid
+        BMP header, or the complete bounded payload fail closed.
+        """
+        remote_path = _validated_remote_path(remote_name)
+        with self._connect(timeout=self.timeout) as sock:
+            self._send_command(sock, f"M662 {remote_path}")
+            return self._read_m662_bmp(sock, self.timeout, M662_MAX_BYTES)
+
+    def rename(self, new_name: str) -> str:
+        """Set the reported printer name using the observed M610 <name> form."""
+        new_name = _validated_gcode_token(new_name, "printer name")
+        response = self.command(f"M610 {new_name}")
+        _require_ack("M610 rename", response, "M610")
+        return response
+
+    def set_fan(self, speed: int) -> str:
+        if isinstance(speed, bool) or not isinstance(speed, int) or not 0 <= speed <= 255:
+            raise ValueError("fan speed must be an integer from 0 to 255")
+        response = self.command(f"M106 S{speed}")
+        _require_ack("M106 fan control", response, "M106")
+        return response
+
+    def fan_off(self) -> str:
+        response = self.command("M107")
+        _require_ack("M107 fan control", response, "M107")
+        return response
 
     def files_raw(self) -> str:
         with self._connect(timeout=M661_TIMEOUT) as sock:
@@ -269,6 +308,39 @@ class FlashForgeClient:
             chunks.append(data)
         return b"".join(chunks).decode("utf-8", errors="replace")
 
+    @staticmethod
+    def _read_m662_bmp(sock: socket.socket, timeout: float, max_bytes: int) -> bytes:
+        deadline = time.monotonic() + timeout
+        received = bytearray()
+        bmp_start: int | None = None
+        expected_size: int | None = None
+        while time.monotonic() < deadline:
+            sock.settimeout(max(0.001, deadline - time.monotonic()))
+            try:
+                chunk = sock.recv(8192)
+            except socket.timeout as exc:
+                raise ProtocolError("timed out reading complete M662 BMP response") from exc
+            if not chunk:
+                raise ProtocolError("connection closed before complete M662 BMP response")
+            received.extend(chunk)
+            if bmp_start is None:
+                bmp_start = received.find(b"BM")
+            if bmp_start is not None:
+                ack = bytes(received[:bmp_start]).decode("ascii", errors="ignore")
+                if not any(line.strip().lower() == "ok" for line in ack.splitlines()):
+                    if len(received) > max_bytes + 8192:
+                        raise ProtocolError("M662 response has no standalone ACK before BMP")
+                    continue
+                if len(received) >= bmp_start + 6 and expected_size is None:
+                    expected_size = int.from_bytes(received[bmp_start + 2:bmp_start + 6], "little")
+                    if expected_size < 14 or expected_size > max_bytes:
+                        raise ProtocolError(f"invalid M662 BMP size: {expected_size}")
+                if expected_size is not None and len(received) >= bmp_start + expected_size:
+                    return bytes(received[bmp_start:bmp_start + expected_size])
+            elif len(received) > max_bytes + 8192:
+                raise ProtocolError(f"M662 response exceeds {max_bytes} byte limit")
+        raise ProtocolError("timed out reading complete M662 BMP response")
+
 
 def _validated_remote_path(remote_name: str) -> str:
     if not isinstance(remote_name, str) or not remote_name:
@@ -299,6 +371,14 @@ def _validated_remote_path(remote_name: str) -> str:
 def _upload_remote_path(remote_name: str) -> str:
     basename = remote_name.rsplit("/", 1)[-1]
     return f"0:/user/{basename}"
+
+
+def _validated_gcode_token(value: str, label: str) -> str:
+    if (not isinstance(value, str) or not value or value in {".", ".."}
+            or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value)
+            or any(char in value for char in "\\/;")):
+        raise ValueError(f"{label} must be a simple G-code token")
+    return value
 
 
 def _report_response(callback: ResponseCallback | None, command: str, response: str) -> None:

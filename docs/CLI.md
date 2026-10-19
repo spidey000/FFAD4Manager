@@ -227,6 +227,75 @@ ffadv4manager config unset host camera_port
 - `unset` accepts one or more keys: `host`, `port`, `timeout`,
   `camera_port`, and `camera_path`.
 
+### Structured output, identity, coordinates, and local inspection
+
+`status --json` prints one JSON object with parsed values and `null` for
+unavailable fields; the raw protocol transcript is intentionally omitted.
+`files --json` prints a JSON array of remote paths. `watch --jsonl` prints one
+status object per line and may be bounded with `--count`.
+
+```sh
+ffadv4manager status --json
+ffadv4manager files --json
+ffadv4manager watch --jsonl --interval 5 --count 12
+ffadv4manager info --json
+ffadv4manager position --json
+ffadv4manager inspect ~/Downloads/model.gcode
+```
+
+`info` reads M115 fields (which vary by model); `position` reads M114 reported
+coordinates and does not independently measure physical position. `inspect`
+is local-only: it reports file size, SHA-256, and narrowly recognized G-code
+comment metadata. GX files are treated as binary and currently report metadata
+as unavailable.
+
+`files preview REMOTE_NAME --output FILE.bmp` requests an M662 printer-side
+thumbnail. The client requires a standalone ACK and a complete BMP before
+writing it. This is not a live camera snapshot.
+
+### Waiting, diagnostics, monitoring, and capture
+
+```sh
+ffadv4manager doctor
+ffadv4manager wait --state READY --timeout 7200
+ffadv4manager wait --bed-below 40 --interval 10 --timeout 3600
+ffadv4manager camera timelapse ./captures --interval 10 --count 60
+ffadv4manager monitor --output print.jsonl --interval 5 --count 100
+ffadv4manager monitor --output print.jsonl --snapshots ./events
+ffadv4manager notify --events paused,offline
+```
+
+`doctor` reports printer-status and camera HTTP checks. `wait` polls until one
+reported state or bed-temperature condition matches; a timeout returns nonzero.
+Timelapse captures interval-based JPEG stills plus a JSONL manifest. It does not
+claim layer synchronization. `monitor` appends status samples and observed state
+transitions to JSONL; when `--snapshots` is supplied, it captures a still on an
+observed state change. `notify` requires Linux `notify-send`; supported events
+are `paused`, `offline`, `printing`, and `ready`. These commands can be stopped
+with Ctrl+C; monitoring/watching handles interruption with exit status 130.
+
+### Named profiles and printer controls
+
+```sh
+ffadv4manager profiles add workshop --host 192.168.1.50 --port 8899
+ffadv4manager profiles list
+ffadv4manager profiles show workshop
+ffadv4manager --profile workshop status
+ffadv4manager profiles update workshop --camera-port 8081
+ffadv4manager profiles delete workshop
+ffadv4manager printer rename workshop-ad4
+ffadv4manager fan on
+ffadv4manager fan off
+```
+
+Profiles live separately in `profiles.json`; within each setting, explicit
+connection flags override the selected profile, which overrides global config.
+`printer rename` sends M610 and checks that M115 reports the requested name;
+this verifies reported state, not persistence across reboot. `fan` controls the
+layer/part-cooling fan only. It does not control the enclosure fan. Rename and
+fan commands change printer state; acknowledgements are not proof of physical
+effect.
+
 ## Exit behavior and safety
 
 Successful commands return `0`. Runtime/configuration errors generally return

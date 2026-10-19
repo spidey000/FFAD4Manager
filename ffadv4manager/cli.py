@@ -3,8 +3,13 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+import math
+from pathlib import Path
+import shutil
+import subprocess
 import sys
 import time
+import urllib.request
 import webbrowser
 
 from ffadv4manager.core import (
@@ -15,6 +20,8 @@ from ffadv4manager.core import (
     discover_printers,
 )
 from ffadv4manager import config as config_store
+from ffadv4manager import profiles as profile_store
+from ffadv4manager.core.inspect_file import inspect_file
 
 DEFAULT_PORT = 8899
 DEFAULT_TIMEOUT = 8.0
@@ -25,13 +32,25 @@ _HELP_TOPICS = {
     "status": "status\n  Read printer state, current file, temperatures, and progress. Prints a human-readable status summary.",
     "files": "files\n  List printer-side files. Output is one file per line.",
     "files-raw": "files-raw\n  Print the unparsed response to the printer's file-list request.",
-    "watch": "watch [--interval SECONDS]\n  Refresh status continuously (default interval: 5 seconds). Press Ctrl+C to stop; exits 130.",
+    "files preview": "files preview REMOTE_NAME --output FILE.bmp\n  Fetch a printer-side BMP thumbnail with M662; this is not a live camera image.",
+    "watch": "watch [--interval SECONDS] [--jsonl] [--count N]\n  Refresh status; JSONL emits one structured sample per line.",
     "discover": "discover [--timeout SECONDS] [--json]\n  Search for printers with UDP multicast/broadcast discovery. Does not require a configured host or connect to printer TCP. Prints a name/IP/port table, or a JSON array with --json; no JSON results is []. On an interactive terminal, human-readable output offers to save a discovered host when exactly one printer advertises command port 8899; with multiple such printers, choose one first. This uses the port advertised in UDP discovery, not a TCP port scan. JSON and non-interactive runs never prompt or save config.",
     "camera": "camera {url,open,snapshot}\n  Build or use the printer's live MJPEG stream URL. Uses the configured printer host or root --host, and does not open a printer TCP connection. Camera defaults: HTTP port 8080 and path /?action=stream. The HTTP endpoint has no authentication; use only on a trusted network. See `ffadv4manager help camera url`, `ffadv4manager help camera open`, or `ffadv4manager help camera snapshot`.",
     "camera url": "camera url [--camera-port PORT] [--camera-path PATH]\n  Print only the camera stream URL, suitable for piping. Uses the configured printer host or root --host. Defaults are port 8080 and path /?action=stream; paths are kept literally, including query strings. No network request is made.",
     "camera open": "camera open [--camera-port PORT] [--camera-path PATH]\n  Ask Python's stdlib webbrowser module to open the MJPEG URL. This depends on a usable desktop browser; headless systems may not open a browser, in which case the URL is printed with guidance. The stream is plain HTTP and has no authentication.",
     "camera snapshot": "camera snapshot OUTPUT [--camera-port PORT] [--camera-path PATH]\n  Download and save the first complete JPEG frame, bounded by the helper's response-size limit. On success prints only the saved path. Requires the camera HTTP endpoint to be reachable; no printer TCP connection is used.",
+    "camera timelapse": "camera timelapse DIRECTORY [--interval SECONDS] [--count N | --duration SECONDS]\n  Capture interval-based JPEG stills and append status metadata to timelapse.jsonl. Layer synchronization is not provided.",
     "upload": "upload LOCAL_FILE [--remote-name NAME] [--start] [--force] [--log-file PATH]\n  Upload a local G-code/GX file and confirm its name appears in M661. Without --start, upload does not select or print the file; M661 does not verify size or content. --start explicitly selects and starts it after the listing check. --log-file appends timestamped printer response records as JSONL. Upload is refused when status reports an active print unless --force is supplied.",
+    "inspect": "inspect LOCAL_FILE\n  Inspect local size, SHA-256, format, and recognized G-code metadata; does not contact a printer.",
+    "info": "info [--json]\n  Query identity and firmware fields reported by M115.",
+    "position": "position [--json]\n  Query reported axes using M114; reported coordinates are not independently measured.",
+    "doctor": "doctor\n  Check stored connection, printer status, and camera endpoint availability.",
+    "wait": "wait [--state STATE | --bed-below CELSIUS] [--interval SECONDS] [--timeout SECONDS]\n  Poll until one observed condition is true; timeout exits 1.",
+    "monitor": "monitor --output PATH [--interval SECONDS] [--snapshots DIR]\n  Append printer status and state transitions to JSONL; optional still-image capture on change.",
+    "notify": "notify --events paused,offline [--interval SECONDS]\n  Watch observed state changes and send Linux desktop notifications via notify-send.",
+    "printer rename": "printer rename NAME\n  Set the reported printer name with M610 and verify it with M115.",
+    "fan": "fan {on,off}\n  Switch the layer/part-cooling fan. This does not control the enclosure fan.",
+    "profiles": "profiles {list,show,add,update,delete}\n  Manage named local connection/camera profiles; use --profile NAME before another command.",
     "print": "print REMOTE_NAME [--force]\n  Select a file already on the printer and start it. Use the printer-side name, with or without /data/. This starts a physical print. It is refused while status reports printing unless --force is supplied.",
     "pause": "pause\n  Pause the current print.",
     "resume": "resume\n  Resume the current print.",
@@ -62,9 +81,16 @@ USAGE
 
 SUPPORTED COMMANDS
   status       Read machine state, temperatures, current file, and progress.
-  watch        Repeatedly display status; Ctrl+C stops the loop.
-  files        List printer-side files; one filename per output line.
+  watch        Repeatedly display status; supports JSONL and bounded samples.
+  files        List remote files or fetch an M662 BMP preview.
   files-raw    Show the unparsed file-list response.
+  info         Read model/firmware information (M115).
+  position     Read reported axes (M114).
+  inspect      Inspect a local G-code/GX file and calculate SHA-256.
+  doctor       Diagnose printer status and camera HTTP availability.
+  wait         Wait for a reported printer condition.
+  monitor      Record status samples and changes to JSONL.
+  notify       Send desktop notifications for observed state events.
   upload       Upload a local file; optionally start it with --start.
   print        Select and start a printer-side file.
   pause        Pause the active print.
@@ -73,6 +99,9 @@ SUPPORTED COMMANDS
   discover     Find printers by UDP multicast/broadcast; no host required.
   camera       Build a stream URL, open the stream, or save a snapshot.
   config       Show, locate, set, or unset local connection/camera defaults.
+  profiles     Manage named local printer profiles.
+  printer      Rename the printer-reported name.
+  fan          Control the layer/part-cooling fan.
 
 CONNECTION AND CONFIGURATION
   Options: --host HOST, --port PORT, --timeout SECONDS. Defaults are port {DEFAULT_PORT}
@@ -129,6 +158,10 @@ EXAMPLES
   ffadv4manager camera snapshot /tmp/ad4.jpg
   ffadv4manager config set --host 192.168.1.50
   ffadv4manager status
+  ffadv4manager status --json
+  ffadv4manager profiles list
+  ffadv4manager --profile workshop status
+  ffadv4manager inspect ~/Downloads/part.gcode
   ffadv4manager --host 192.168.1.60 --timeout 12 files
   ffadv4manager upload ~/Downloads/part.gcode --remote-name part.gcode
   ffadv4manager upload ~/Downloads/part.gcode --start
@@ -147,13 +180,34 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", help="Printer IP address or hostname (or store it with 'ffadv4manager config set')")
     parser.add_argument("--port", type=int, help=f"Printer TCP port, default {DEFAULT_PORT}")
     parser.add_argument("--timeout", type=float, help=f"Socket timeout in seconds, default {DEFAULT_TIMEOUT}")
+    parser.add_argument("--profile", help="Use a named printer profile")
 
     sub = parser.add_subparsers(dest="command", required=True)
     help_cmd = sub.add_parser("help", help="Show the CLI guide or help for a command")
     help_cmd.add_argument("topic", nargs="*")
-    sub.add_parser("status")
-    sub.add_parser("files")
+    status_cmd = sub.add_parser("status")
+    status_cmd.add_argument("--json", action="store_true")
+    files_cmd = sub.add_parser("files")
+    files_cmd.add_argument("--json", action="store_true")
+    files_sub = files_cmd.add_subparsers(dest="files_action")
+    preview_cmd = files_sub.add_parser("preview", help="Save a printer-side BMP thumbnail")
+    preview_cmd.add_argument("remote_name")
+    preview_cmd.add_argument("--output", required=True)
     sub.add_parser("files-raw")
+
+    info_cmd = sub.add_parser("info", help="Read printer identity and firmware details")
+    info_cmd.add_argument("--json", action="store_true")
+    position_cmd = sub.add_parser("position", help="Read reported machine coordinates")
+    position_cmd.add_argument("--json", action="store_true")
+    inspect_cmd = sub.add_parser("inspect", help="Inspect a local G-code/GX file")
+    inspect_cmd.add_argument("file")
+    doctor = sub.add_parser("doctor", help="Check printer and camera connectivity")
+    wait_cmd = sub.add_parser("wait", help="Wait for a reported printer condition")
+    wait_group = wait_cmd.add_mutually_exclusive_group(required=True)
+    wait_group.add_argument("--state")
+    wait_group.add_argument("--bed-below", type=float)
+    wait_cmd.add_argument("--interval", type=float, default=5.0)
+    wait_cmd.add_argument("--timeout", dest="wait_timeout", type=float, default=3600.0)
 
     discover = sub.add_parser("discover", help="Discover printers using UDP")
     discover.add_argument("--timeout", type=float, default=3.0)
@@ -171,6 +225,25 @@ def main(argv: list[str] | None = None) -> int:
 
     watch = sub.add_parser("watch")
     watch.add_argument("--interval", type=float, default=5.0)
+    watch.add_argument("--jsonl", action="store_true")
+    watch.add_argument("--count", type=int)
+
+    timelapse = camera_sub.add_parser("timelapse", help="Capture JPEG frames at an interval")
+    timelapse.add_argument("directory")
+    timelapse.add_argument("--interval", type=float, default=10.0)
+    timelapse.add_argument("--count", type=int)
+    timelapse.add_argument("--duration", type=float)
+    timelapse.add_argument("--camera-port", type=_camera_port_arg)
+    timelapse.add_argument("--camera-path")
+    monitor = sub.add_parser("monitor", help="Record printer status to JSONL")
+    monitor.add_argument("--output", required=True)
+    monitor.add_argument("--interval", type=float, default=5.0)
+    monitor.add_argument("--count", type=int)
+    monitor.add_argument("--snapshots", help="Capture camera JPEGs on observed state changes")
+    notify = sub.add_parser("notify", help="Notify on printer state events")
+    notify.add_argument("--events", default="paused,offline")
+    notify.add_argument("--interval", type=float, default=5.0)
+    notify.add_argument("--count", type=int)
 
     upload = sub.add_parser("upload")
     upload.add_argument("file")
@@ -186,6 +259,29 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("pause")
     sub.add_parser("resume")
     sub.add_parser("cancel")
+
+    printer_cmd = sub.add_parser("printer", help="Change printer identity")
+    printer_sub = printer_cmd.add_subparsers(dest="printer_action", required=True)
+    rename_cmd = printer_sub.add_parser("rename", help="Set the printer-reported name")
+    rename_cmd.add_argument("name")
+    fan_cmd = sub.add_parser("fan", help="Control the part-cooling fan")
+    fan_sub = fan_cmd.add_subparsers(dest="fan_action", required=True)
+    fan_sub.add_parser("on")
+    fan_sub.add_parser("off")
+
+    profiles_cmd = sub.add_parser("profiles", help="Manage named printer profiles")
+    profiles_sub = profiles_cmd.add_subparsers(dest="profiles_action", required=True)
+    profiles_sub.add_parser("list")
+    profile_show = profiles_sub.add_parser("show")
+    profile_show.add_argument("name")
+    profile_add = profiles_sub.add_parser("add")
+    profile_add.add_argument("name")
+    _add_profile_values(profile_add)
+    profile_update = profiles_sub.add_parser("update")
+    profile_update.add_argument("name")
+    _add_profile_values(profile_update)
+    profile_delete = profiles_sub.add_parser("delete")
+    profile_delete.add_argument("name")
 
     config_cmd = sub.add_parser("config", help="View or edit stored connection defaults")
     config_sub = config_cmd.add_subparsers(dest="config_action", required=True)
@@ -209,6 +305,18 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "config":
         return _handle_config(args)
+
+    if args.command == "profiles":
+        return _handle_profiles(args)
+
+    if args.command == "inspect":
+        try:
+            result = inspect_file(args.file)
+            print(json.dumps(_inspection_json(result), ensure_ascii=False, sort_keys=True))
+            return 0
+        except Exception as exc:  # noqa: BLE001
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
 
     if args.command == "discover":
         try:
@@ -235,19 +343,59 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
 
+    if args.command == "doctor":
+        try:
+            return _handle_doctor(args)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+
     host, port, timeout = _resolve_connection(args, parser)
     client = FlashForgeClient(host, port, timeout=timeout)
 
     try:
         if args.command == "status":
-            _print_status(client.status())
+            status = client.status()
+            if args.json:
+                print(json.dumps(_status_json(status), sort_keys=True))
+            else:
+                _print_status(status)
         elif args.command == "watch":
-            _watch(client, args.interval)
+            _watch(client, args.interval, jsonl=args.jsonl, count=args.count)
         elif args.command == "files":
-            for file in client.files():
-                print(file)
+            if args.files_action == "preview":
+                bmp = client.preview_bmp(args.remote_name)
+                Path(args.output).write_bytes(bmp)
+                print(args.output)
+            else:
+                files = client.files()
+                if args.json:
+                    print(json.dumps(files, ensure_ascii=False))
+                else:
+                    for file in files:
+                        print(file)
         elif args.command == "files-raw":
             print(client.files_raw())
+        elif args.command == "info":
+            info = client.info()
+            print(json.dumps(info, ensure_ascii=False, sort_keys=True) if args.json else "\n".join(f"{k}: {v}" for k, v in info.items()))
+        elif args.command == "position":
+            position = client.position()
+            print(json.dumps(position, sort_keys=True) if args.json else "\n".join(f"{axis}: {value:g}" for axis, value in position.items()))
+        elif args.command == "wait":
+            return _wait_for_condition(client, args.state, args.bed_below, args.interval, args.wait_timeout)
+        elif args.command == "monitor":
+            return _monitor(client, args, host)
+        elif args.command == "notify":
+            return _notify(client, args)
+        elif args.command == "printer":
+            response = client.rename(args.name)
+            info = client.info()
+            if info.get("Machine Name") != args.name:
+                raise RuntimeError("M610 acknowledged but M115 did not report the requested printer name")
+            print(response.rstrip())
+        elif args.command == "fan":
+            print((client.set_fan(255) if args.fan_action == "on" else client.fan_off()).rstrip())
         elif args.command == "upload":
             status = client.status()
             if status.is_printing and not args.force:
@@ -279,6 +427,8 @@ def main(argv: list[str] | None = None) -> int:
             print(client.resume())
         elif args.command == "cancel":
             print(client.cancel())
+        elif args.command == "camera":
+            return _capture_timelapse(client, args, host)
     except KeyboardInterrupt:
         return 130
     except Exception as exc:  # noqa: BLE001 - CLI should show clear errors
@@ -343,8 +493,11 @@ def _offer_discovered_host(printers) -> None:
 
 
 def _resolve_connection(args, parser) -> tuple[str, int, float]:
-    """Combine CLI flags with the stored config: flag > config file > default."""
-    stored = config_store.load_config()
+    """Combine CLI flags, profile, stored config and defaults by field."""
+    try:
+        stored = _effective_settings(args)
+    except (KeyError, ValueError) as exc:
+        parser.error(str(exc))
     host = args.host or stored.get("host")
     if not host:
         parser.error(
@@ -356,6 +509,50 @@ def _resolve_connection(args, parser) -> tuple[str, int, float]:
         args.timeout if args.timeout is not None else float(stored.get("timeout", DEFAULT_TIMEOUT))
     )
     return host, port, timeout
+
+
+def _effective_settings(args) -> dict[str, object]:
+    stored: dict[str, object] = dict(config_store.load_config())
+    profile_name = getattr(args, "profile", None)
+    if profile_name:
+        try:
+            stored.update(profile_store.get_profile(profile_name))
+        except KeyError as exc:
+            raise ValueError(f"unknown printer profile: {profile_name}") from exc
+    for key in ("host", "port", "timeout"):
+        value = getattr(args, key, None)
+        if value is not None:
+            stored[key] = value
+    return stored
+
+
+def _add_profile_values(parser) -> None:
+    parser.add_argument("--host")
+    parser.add_argument("--port", type=int)
+    parser.add_argument("--timeout", type=float)
+    parser.add_argument("--camera-port", type=_camera_port_arg)
+    parser.add_argument("--camera-path")
+
+
+def _handle_profiles(args) -> int:
+    action = args.profiles_action
+    try:
+        if action == "list":
+            print(json.dumps(profile_store.list_profiles(), ensure_ascii=False))
+        elif action == "show":
+            print(json.dumps(profile_store.get_profile(args.name), ensure_ascii=False, sort_keys=True))
+        elif action in {"add", "update"}:
+            values = {key: getattr(args, key) for key in profile_store.PROFILE_KEYS if getattr(args, key) is not None}
+            (profile_store.add_profile if action == "add" else profile_store.update_profile)(args.name, values)
+            verb = "added" if action == "add" else "updated"
+            print(f"Profile {verb}: {args.name}")
+        elif action == "delete":
+            profile_store.delete_profile(args.name)
+            print(f"Deleted profile: {args.name}")
+        return 0
+    except (KeyError, ValueError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
 
 def _handle_config(args) -> int:
@@ -420,7 +617,7 @@ def _validate_camera_port(port: int) -> None:
 
 
 def _handle_camera(args) -> int:
-    stored = config_store.load_config()
+    stored = _effective_settings(args)
     host = args.host or stored.get("host")
     if not host:
         raise CameraError("no printer host given: pass --host <ip> or store one with 'ffadv4manager config set --host <ip>'")
@@ -459,6 +656,9 @@ def _handle_camera(args) -> int:
         saved = capture_first_frame(url, args.output)
         print(saved)
         return 0
+    if args.camera_action == "timelapse":
+        client = FlashForgeClient(host, int(stored.get("port", DEFAULT_PORT)), timeout=float(stored.get("timeout", DEFAULT_TIMEOUT)))
+        return _capture_timelapse(client, args, host, url)
     return 0
 
 
@@ -479,12 +679,222 @@ def _print_status(status) -> None:
         print(f"Layer:   {status.layer_current}/{status.layer_total}")
 
 
-def _watch(client: FlashForgeClient, interval: float) -> None:
+def _status_json(status) -> dict[str, object]:
+    return {
+        "machine_status": status.machine_status,
+        "move_mode": status.move_mode,
+        "current_file": status.current_file,
+        "nozzle_current": status.nozzle_current,
+        "nozzle_target": status.nozzle_target,
+        "bed_current": status.bed_current,
+        "bed_target": status.bed_target,
+        "sd_current": status.sd_current,
+        "sd_total": status.sd_total,
+        "progress_percent": status.progress_percent,
+        "layer_current": status.layer_current,
+        "layer_total": status.layer_total,
+    }
+
+
+def _inspection_json(result) -> dict[str, object]:
+    return {
+        "path": str(result.path), "size_bytes": result.size_bytes,
+        "sha256": result.sha256, "format": result.format, "metadata": result.metadata,
+    }
+
+
+def _record_jsonl(path: str, record: dict[str, object]) -> None:
+    with open(path, "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        stream.flush()
+
+
+def _watch(client: FlashForgeClient, interval: float, *, jsonl: bool = False, count: int | None = None) -> None:
+    _validate_poll(interval, count)
+    samples = 0
+    while count is None or samples < count:
+        status = client.status()
+        if jsonl:
+            print(json.dumps({"timestamp": _utc_now(), **_status_json(status)}, sort_keys=True), flush=True)
+        else:
+            print("\033[2J\033[H", end="")
+            _print_status(status)
+            print("\nCtrl+C to stop watching.")
+        samples += 1
+        if count is None or samples < count:
+            time.sleep(interval)
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _validate_poll(interval: float, count: int | None) -> None:
+    if not math.isfinite(interval) or interval <= 0:
+        raise ValueError("interval must be a positive finite number")
+    if count is not None and count <= 0:
+        raise ValueError("count must be a positive integer")
+
+
+def _wait_for_condition(client, state: str | None, bed_below: float | None, interval: float, timeout: float) -> int:
+    _validate_poll(interval, None)
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("timeout must be a positive finite number")
+    if bed_below is not None and not math.isfinite(bed_below):
+        raise ValueError("bed-below must be a finite temperature")
+    deadline = time.monotonic() + timeout
     while True:
-        print("\033[2J\033[H", end="")
-        _print_status(client.status())
-        print("\nCtrl+C to stop watching.")
-        time.sleep(interval)
+        status = client.status()
+        matched = (state is not None and status.machine_status == state) or (
+            bed_below is not None and status.bed_current is not None and status.bed_current < bed_below
+        )
+        if matched:
+            print(json.dumps({"matched": True, **_status_json(status)}, sort_keys=True))
+            return 0
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            print("Timed out waiting for printer condition.", file=sys.stderr)
+            return 1
+        time.sleep(min(interval, remaining))
+
+
+def _handle_doctor(args) -> int:
+    settings = _effective_settings(args)
+    host = settings.get("host")
+    if not host:
+        raise ValueError("no printer host configured; set one or use --profile / --host")
+    port = int(settings.get("port", DEFAULT_PORT))
+    timeout = float(settings.get("timeout", DEFAULT_TIMEOUT))
+    result: dict[str, object] = {"host": host, "checks": []}
+    failures = 0
+    started = time.monotonic()
+    try:
+        status = FlashForgeClient(str(host), port, timeout).status()
+        result["checks"].append({"name": "printer_status", "ok": True, "status": status.machine_status})
+    except Exception as exc:
+        failures += 1
+        result["checks"].append({"name": "printer_status", "ok": False, "error": str(exc)})
+    camera_port = int(settings.get("camera_port", DEFAULT_CAMERA_PORT))
+    camera_path = str(settings.get("camera_path", DEFAULT_CAMERA_PATH))
+    url = build_stream_url(str(host), camera_port, camera_path)
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            response.read(1)
+        result["checks"].append({"name": "camera_http", "ok": True})
+    except Exception as exc:
+        failures += 1
+        result["checks"].append({"name": "camera_http", "ok": False, "error": str(exc)})
+    result["duration_seconds"] = round(time.monotonic() - started, 3)
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    return 1 if failures else 0
+
+
+def _capture_timelapse(client, args, host: str, url: str | None = None) -> int:
+    _validate_poll(args.interval, args.count)
+    if args.duration is not None and (not math.isfinite(args.duration) or args.duration <= 0):
+        raise ValueError("duration must be a positive finite number")
+    if args.count is not None and args.duration is not None:
+        raise ValueError("choose either --count or --duration, not both")
+    directory = Path(args.directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    if url is None:
+        settings = _effective_settings(args)
+        url = build_stream_url(
+            host,
+            int(getattr(args, "camera_port", None) or settings.get("camera_port", DEFAULT_CAMERA_PORT)),
+            getattr(args, "camera_path", None) or settings.get("camera_path", DEFAULT_CAMERA_PATH),
+        )
+    deadline = time.monotonic() + args.duration if args.duration is not None else None
+    index = 0
+    manifest = directory / "timelapse.jsonl"
+    while args.count is None or index < args.count:
+        if deadline is not None and time.monotonic() >= deadline:
+            break
+        status = client.status()
+        stamp = datetime.now(timezone.utc)
+        output = directory / f"frame-{stamp.strftime('%Y%m%dT%H%M%S')}-{index:06d}.jpg"
+        capture_first_frame(url, output)
+        _record_jsonl(str(manifest), {
+            "timestamp": stamp.isoformat(), "image": output.name,
+            "machine_status": status.machine_status, "current_file": status.current_file,
+            "progress_percent": status.progress_percent,
+        })
+        print(output, flush=True)
+        index += 1
+        if args.count is not None and index >= args.count:
+            break
+        remaining = deadline - time.monotonic() if deadline is not None else args.interval
+        if remaining > 0:
+            time.sleep(min(args.interval, remaining))
+    return 0
+
+
+def _monitor(client, args, host: str) -> int:
+    _validate_poll(args.interval, args.count)
+    output = args.output
+    snapshots = Path(args.snapshots) if args.snapshots else None
+    if snapshots:
+        snapshots.mkdir(parents=True, exist_ok=True)
+    settings = _effective_settings(args)
+    camera_url = build_stream_url(
+        host, int(settings.get("camera_port", DEFAULT_CAMERA_PORT)),
+        str(settings.get("camera_path", DEFAULT_CAMERA_PATH)),
+    ) if snapshots else None
+    previous = object()
+    samples = 0
+    while args.count is None or samples < args.count:
+        stamp = _utc_now()
+        try:
+            status = client.status()
+            state = status.machine_status or "UNKNOWN"
+            changed = state != previous
+            record: dict[str, object] = {"timestamp": stamp, "event": "status" if not changed else "state_change", **_status_json(status)}
+            if changed and snapshots and camera_url:
+                image = snapshots / f"event-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{samples:06d}.jpg"
+                try:
+                    capture_first_frame(camera_url, image)
+                    record["snapshot"] = str(image)
+                except Exception as exc:
+                    record["snapshot_error"] = str(exc)
+            previous = state
+        except Exception as exc:
+            state = "OFFLINE"
+            changed = state != previous
+            record = {"timestamp": stamp, "event": "offline" if changed else "poll_error", "error": str(exc)}
+            previous = state
+        _record_jsonl(output, record)
+        print(json.dumps(record, ensure_ascii=False, sort_keys=True), flush=True)
+        samples += 1
+        if args.count is None or samples < args.count:
+            time.sleep(args.interval)
+    return 0
+
+
+def _notify(client, args) -> int:
+    _validate_poll(args.interval, args.count)
+    executable = shutil.which("notify-send")
+    if not executable:
+        raise RuntimeError("notify-send was not found; install a desktop notification service")
+    wanted = {event.strip().casefold() for event in args.events.split(",") if event.strip()}
+    if not wanted or not wanted <= {"paused", "offline", "printing", "ready"}:
+        raise ValueError("--events accepts paused,offline,printing,ready")
+    previous = object()
+    samples = 0
+    while args.count is None or samples < args.count:
+        try:
+            status = client.status()
+            raw_state = (status.machine_status or "unknown").casefold()
+            state = "paused" if raw_state == "paused" else "printing" if status.is_printing else "ready" if raw_state == "ready" else raw_state
+        except Exception:
+            state = "offline"
+        if state != previous and state in wanted:
+            subprocess.run([executable, "FFADV4Manager", f"Printer state: {state}"], check=False)
+            print(json.dumps({"timestamp": _utc_now(), "event": state}), flush=True)
+        previous = state
+        samples += 1
+        if args.count is None or samples < args.count:
+            time.sleep(args.interval)
+    return 0
 
 
 def _progress(done: int, total: int) -> None:

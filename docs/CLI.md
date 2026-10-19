@@ -167,22 +167,18 @@ empty files are rejected locally before any upload connection/data transfer.
 
 Supported G-code inputs (`.gcode`, `.gco`, `.g`) are automatically wrapped as GX
 before upload; existing GX is detected by its `xgcode 1.0\n\0` magic, not its
-extension, and is not converted again. The original G-code is preserved: the
-standalone `gcode-to-gx` executable is run on a temporary copy. Install
-HellEvro/FF_Gcode_to_GX and its Python 3.10+ / Pillow prerequisites; conversion
-selects the `adventurer4` profile. Converted uploads use a `.gx` remote
+extension, and is not converted again. The original G-code is preserved: bundled
+converter code operates on a temporary copy, selecting the `adventurer4` profile.
+Pillow is installed automatically as a project dependency; no standalone
+converter installation is needed. Converted uploads use a `.gx` remote
 extension; a requested remote basename is retained with that extension.
 `--no-convert` uploads bytes unchanged. Unknown input types are rejected for
 automatic conversion. Wrapping only adds the GX container and thumbnail; it does
 not rewrite incompatible machine or toolpath commands. No actual-printer
 acceptance of converted files has been validated.
-
-Install the standalone converter in a Python 3.10+ environment (it installs its
-Pillow dependency and `gcode-to-gx` executable):
-
-```sh
-python3 -m pip install "git+https://github.com/HellEvro/FF_Gcode_to_GX.git"
-```
+The embedded G-code text follows the upstream encoder's Latin-1 conversion;
+characters outside that encoding are replaced, though the original local file
+is left untouched.
 
 ```sh
 ffadv4manager upload ~/Downloads/model.gcode
@@ -195,8 +191,8 @@ ffadv4manager convert ~/Downloads/model.gcode --output /tmp/model.gx
 ```
 
 `convert INPUT --output OUTPUT.gx` performs the same local-only conversion and
-checks the expected GX header/BMP layout. The converter must be on `PATH` as
-`gcode-to-gx`.
+checks the expected GX header/BMP layout. Conversion only wraps the G-code and
+adds a thumbnail; it does not rewrite incompatible machine or toolpath commands.
 
 The command displays upload progress and then reports that the `0:/user/NAME`
 file is listed. Preamble, M28, M29, and M661 replies are labeled on stderr;

@@ -1,5 +1,3 @@
-import sys
-
 from ffadv4manager.core.models import PrinterStatus
 from ffadv4manager import config as config_store
 from scripts import orca_ad4_upload as hook
@@ -148,15 +146,9 @@ def test_missing_host_uses_shared_config_error_without_traceback(monkeypatch, tm
 
 def test_hook_converts_before_upload_and_preserves_original(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path, {"host": "printer"})
-    exe_dir = tmp_path / "bin"
-    exe_dir.mkdir()
-    executable = exe_dir / "gcode-to-gx"
-    executable.write_text(f"#!{sys.executable}\nimport pathlib, struct, sys\np=pathlib.Path(sys.argv[-1])\nh=b'xgcode 1.0\\n\\0'+struct.pack('<4I', 58, 14454, 14512, 14512)+bytes(30)\np.write_bytes(h+b'BM'+bytes(14452)+p.read_bytes())\n")
-    executable.chmod(0o755)
-    monkeypatch.setenv("PATH", str(exe_dir))
     FakeClient.statuses = [_status()]
     gcode = tmp_path / "part.gcode"
-    original = b"G1 X4\n"
+    original = b"; layer_height = 0.2\nG1 X4\n"
     gcode.write_bytes(original)
 
     assert hook.main([str(gcode)]) == 0

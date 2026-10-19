@@ -8,13 +8,14 @@ version = "0.2.0"
 description = "Command-line and library tooling for FlashForge Adventurer 3/4 network control"
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }
+license = { text = "GPL-3.0-or-later" }
+dependencies = ["Pillow>=10.0.0"]
 authors = [{ name = "FFADV4Manager Contributors" }]
 keywords = ["flashforge", "adventurer", "3d-printing", "gcode"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
-  "License :: OSI Approved :: MIT License",
+  "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.9",
 ]

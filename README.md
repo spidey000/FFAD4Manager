@@ -264,3 +264,16 @@ explicitly bypasses these status gates; `--start` remains opt-in. Hook failures
 return nonzero, which OrcaSlicer treats as export failure under the verified
 contract. Usage/configuration errors return status 2; operational errors return
 status 1.
+
+## GX converter attribution and license
+
+FFADV4Manager is distributed under the GNU General Public License v3.0 or later
+(GPL-3.0-or-later); see [LICENSE](LICENSE). It includes an adapted, in-process
+GX conversion implementation based on [HellEvro/FF_Gcode_to_GX](https://github.com/HellEvro/FF_Gcode_to_GX)
+version 1.1.0, upstream commit `b44b5760671594e4c0a0234131adc7f398338349`,
+copyright © 2026 Gcode_to_Gx contributors and licensed under GPL-3.0-or-later.
+The adapted GX writer, metadata parser, thumbnail encoder, and Adventurer printer
+profile implementation are located in `ffadv4manager/core/gx_converter/`.
+The upstream project notes that its design is based in part on
+[urself25/Orca_Gcode_to_Gx](https://github.com/urself25/Orca_Gcode_to_Gx),
+also licensed under GPLv3.

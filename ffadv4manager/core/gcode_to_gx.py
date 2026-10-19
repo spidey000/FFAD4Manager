@@ -1,13 +1,17 @@
-"""Safe wrapper around the standalone HellEvro/FF_Gcode_to_GX converter."""
+"""Safe wrapper around the bundled HellEvro/FF_Gcode_to_GX-derived converter."""
 from __future__ import annotations
 
 import shutil
 import struct
-import subprocess
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
+
+from .gx_converter.gx_writer import encode_gx
+from .gx_converter.metadata import extract_metadata
+from .gx_converter.printers.registry import resolve_profile
+from .gx_converter.thumbnail import extract_thumbnail_bmp
 
 GX_MAGIC = b"xgcode 1.0\n\0"
 HEADER_SIZE = 58
@@ -32,13 +36,13 @@ def validate_gx(path: str | Path) -> None:
         header = stream.read(HEADER_SIZE)
         if header[:len(GX_MAGIC)] != GX_MAGIC:
             raise ValueError("converter output is not a valid GX file (bad magic or truncated layout)")
-        bmp_offset, bmp_size, gcode_offset, duplicate_gcode_offset = struct.unpack_from(
+        _reserved, bmp_offset, gcode_offset, duplicate_gcode_offset = struct.unpack_from(
             "<4I", header, len(GX_MAGIC)
         )
         stream.seek(HEADER_SIZE)
         bmp_signature = stream.read(2)
-    if bmp_offset != HEADER_SIZE or bmp_size != BMP_SIZE:
-        raise ValueError("converter output has invalid BMP offset/size in its GX header")
+    if bmp_offset != HEADER_SIZE:
+        raise ValueError("converter output has invalid BMP offset in its GX header")
     if gcode_offset != GCODE_OFFSET or duplicate_gcode_offset != GCODE_OFFSET:
         raise ValueError("converter output has invalid G-code offset in its GX header")
     if bmp_signature != b"BM":
@@ -52,23 +56,17 @@ def convert_gcode_to_gx(source: str | Path, output: str | Path) -> Path:
         raise ValueError(f"automatic GX conversion supports only G-code suffixes: {suffixes}")
     if not source_path.is_file():
         raise FileNotFoundError(source_path)
-    executable = shutil.which("gcode-to-gx")
-    if not executable:
-        raise RuntimeError("gcode-to-gx converter not found on PATH; install HellEvro/FF_Gcode_to_GX")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="ffadv4-gx-") as work:
         copy = Path(work) / source_path.name
         shutil.copyfile(source_path, copy)
-        try:
-            subprocess.run(
-                [executable, "--printer", "adventurer4", str(copy)],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except (subprocess.CalledProcessError, OSError) as exc:
-            detail = getattr(exc, "stderr", None) or str(exc)
-            raise RuntimeError(f"gcode-to-gx conversion failed: {detail}") from exc
+        lines = copy.read_text(encoding="utf-8", errors="ignore").splitlines(keepends=True)
+        if not lines:
+            raise ValueError(f"Empty or unreadable file: {source_path}")
+        profile = resolve_profile("adventurer4", lines=lines)
+        metadata = extract_metadata(lines, profile=profile)
+        gx_data = encode_gx(metadata, extract_thumbnail_bmp(lines), "".join(lines))
+        copy.write_bytes(gx_data)
         validate_gx(copy)
         shutil.copyfile(copy, output_path)
     return output_path

@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 from ffadv4manager.core import FlashForgeClient
+from ffadv4manager.core.gcode_to_gx import upload_file as gx_upload_file
 from ffadv4manager import config as config_store
 
 DEFAULT_PORT = 8899
@@ -72,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=_timeout_arg)
     parser.add_argument("--start", action="store_true")
     parser.add_argument("--force", action="store_true", help="Override printer busy-state safety checks")
+    parser.add_argument("--no-convert", action="store_true", help="Upload the generated file unchanged")
     args = parser.parse_args(argv)
 
     if args.gcode and args.gcode_option:
@@ -105,7 +107,13 @@ def main(argv: list[str] | None = None) -> int:
         client = FlashForgeClient(host, port, timeout=timeout)
         if not args.force:
             _require_safe_status(client, "before upload")
-        remote = client.upload_and_confirm_listed(Path(gcode))
+        with gx_upload_file(
+            gcode, no_convert=args.no_convert
+        ) as (upload_path, converted_name):
+            if converted_name:
+                remote = client.upload_and_confirm_listed(upload_path, converted_name)
+            else:
+                remote = client.upload_and_confirm_listed(upload_path)
         print(f"Uploaded and listed {remote}")
         if args.start:
             if not args.force:

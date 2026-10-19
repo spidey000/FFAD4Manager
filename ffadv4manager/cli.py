@@ -22,6 +22,10 @@ from ffadv4manager.core import (
 from ffadv4manager import config as config_store
 from ffadv4manager import profiles as profile_store
 from ffadv4manager.core.inspect_file import inspect_file
+from ffadv4manager.core.gcode_to_gx import (
+    convert_gcode_to_gx,
+    upload_file as gx_upload_file,
+)
 
 DEFAULT_PORT = 8899
 DEFAULT_TIMEOUT = 8.0
@@ -40,7 +44,8 @@ _HELP_TOPICS = {
     "camera open": "camera open [--camera-port PORT] [--camera-path PATH]\n  Ask Python's stdlib webbrowser module to open the MJPEG URL. This depends on a usable desktop browser; headless systems may not open a browser, in which case the URL is printed with guidance. The stream is plain HTTP and has no authentication.",
     "camera snapshot": "camera snapshot OUTPUT [--camera-port PORT] [--camera-path PATH]\n  Download and save the first complete JPEG frame, bounded by the helper's response-size limit. On success prints only the saved path. Requires the camera HTTP endpoint to be reachable; no printer TCP connection is used.",
     "camera timelapse": "camera timelapse DIRECTORY [--interval SECONDS] [--count N | --duration SECONDS]\n  Capture interval-based JPEG stills and append status metadata to timelapse.jsonl. Layer synchronization is not provided.",
-    "upload": "upload LOCAL_FILE [--remote-name NAME] [--start] [--force] [--log-file PATH]\n  Upload a local G-code/GX file and confirm its name appears in M661. Without --start, upload does not select or print the file; M661 does not verify size or content. --start explicitly selects and starts it after the listing check. --log-file appends timestamped printer response records as JSONL. Upload is refused when status reports an active print unless --force is supplied.",
+    "upload": "upload LOCAL_FILE [--remote-name NAME] [--no-convert] [--start] [--force] [--log-file PATH]\n  Upload a local G-code/GX file; G-code is wrapped as GX automatically, preserving the original. --no-convert bypasses wrapping. Without --start, upload does not select or print the file; M661 does not verify size or content. --start explicitly selects and starts it after the listing check. Upload is refused when status reports printing unless --force is supplied. --log-file appends timestamped printer-response JSONL.",
+    "convert": "convert INPUT --output OUTPUT.gx\n  Locally wrap supported G-code as GX. Does not contact a printer.",
     "inspect": "inspect LOCAL_FILE\n  Inspect local size, SHA-256, format, and recognized G-code metadata; does not contact a printer.",
     "info": "info [--json]\n  Query identity and firmware fields reported by M115.",
     "position": "position [--json]\n  Query reported axes using M114; reported coordinates are not independently measured.",
@@ -87,6 +92,7 @@ SUPPORTED COMMANDS
   info         Read model/firmware information (M115).
   position     Read reported axes (M114).
   inspect      Inspect a local G-code/GX file and calculate SHA-256.
+  convert      Convert local G-code to GX for an Adventurer 4.
   doctor       Diagnose printer status and camera HTTP availability.
   wait         Wait for a reported printer condition.
   monitor      Record status samples and changes to JSONL.
@@ -251,6 +257,10 @@ def main(argv: list[str] | None = None) -> int:
     upload.add_argument("--start", action="store_true")
     upload.add_argument("--force", action="store_true", help="Allow upload while printer reports printing")
     upload.add_argument("--log-file", help="Append timestamped printer responses to this JSONL file")
+    upload.add_argument("--no-convert", action="store_true", help="Upload input unchanged")
+    convert = sub.add_parser("convert", help="Convert local G-code to GX")
+    convert.add_argument("input")
+    convert.add_argument("--output", required=True)
 
     print_cmd = sub.add_parser("print")
     print_cmd.add_argument("remote_name")
@@ -313,6 +323,15 @@ def main(argv: list[str] | None = None) -> int:
         try:
             result = inspect_file(args.file)
             print(json.dumps(_inspection_json(result), ensure_ascii=False, sort_keys=True))
+            return 0
+        except Exception as exc:  # noqa: BLE001
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+
+    if args.command == "convert":
+        try:
+            convert_gcode_to_gx(args.input, args.output)
+            print(args.output)
             return 0
         except Exception as exc:  # noqa: BLE001
             print(f"Error: {exc}", file=sys.stderr)
@@ -405,10 +424,17 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 2
             response_callback = _response_logger(args.log_file) if args.log_file else _print_response
-            remote = client.upload_and_confirm_listed(
-                args.file, args.remote_name, progress=_progress,
-                response_callback=response_callback,
-            )
+            with gx_upload_file(
+                args.file, no_convert=args.no_convert
+            ) as (upload_path, converted_name):
+                remote_name = args.remote_name
+                if converted_name:
+                    requested = Path(remote_name).name if remote_name else converted_name
+                    remote_name = str(Path(requested).with_suffix(".gx"))
+                remote = client.upload_and_confirm_listed(
+                    upload_path, remote_name, progress=_progress,
+                    response_callback=response_callback,
+                )
             print(f"\nUploaded and listed: {remote}")
             if args.start:
                 print(client.print_file(remote, response_callback=response_callback))

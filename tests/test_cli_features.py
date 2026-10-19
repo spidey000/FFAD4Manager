@@ -148,7 +148,7 @@ def test_upload_start_is_not_invoked_when_verification_fails(monkeypatch, tmp_pa
     file = tmp_path / "part.gcode"
     file.write_text("G1 X1\n")
 
-    assert cli.main(["--host", "printer", "upload", str(file), "--start"]) == 1
+    assert cli.main(["--host", "printer", "upload", str(file), "--no-convert", "--start"]) == 1
     assert "uploaded file not listed" in capsys.readouterr().err
     assert not client.started
 
@@ -176,7 +176,7 @@ def test_successful_upload_without_start_never_calls_print_file(monkeypatch, tmp
     file = tmp_path / "part.gcode"
     file.write_text("G1 X1\n")
 
-    assert cli.main(["--host", "printer", "upload", str(file)]) == 0
+    assert cli.main(["--host", "printer", "upload", str(file), "--no-convert"]) == 0
     assert client.calls == ["status", "upload_and_confirm_listed"]
     assert "Uploaded and listed: 0:/user/part.gcode" in capsys.readouterr().out
 
@@ -205,7 +205,7 @@ def test_explicit_start_calls_print_only_after_upload_verification(monkeypatch, 
     file = tmp_path / "part.gcode"
     file.write_text("G1 X1\n")
 
-    assert cli.main(["--host", "printer", "upload", str(file), "--start"]) == 0
+    assert cli.main(["--host", "printer", "upload", str(file), "--no-convert", "--start"]) == 0
     assert client.calls == ["status", "upload_and_confirm_listed", ("print_file", "0:/user/part.gcode")]
 
 

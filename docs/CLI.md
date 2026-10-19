@@ -165,13 +165,38 @@ unless `--force` is supplied. `--force` bypasses that busy-status check; it is
 not a general safety guarantee. A local file must exist and must not be empty:
 empty files are rejected locally before any upload connection/data transfer.
 
+Supported G-code inputs (`.gcode`, `.gco`, `.g`) are automatically wrapped as GX
+before upload; existing GX is detected by its `xgcode 1.0\n\0` magic, not its
+extension, and is not converted again. The original G-code is preserved: the
+standalone `gcode-to-gx` executable is run on a temporary copy. Install
+HellEvro/FF_Gcode_to_GX and its Python 3.10+ / Pillow prerequisites; conversion
+selects the `adventurer4` profile. Converted uploads use a `.gx` remote
+extension; a requested remote basename is retained with that extension.
+`--no-convert` uploads bytes unchanged. Unknown input types are rejected for
+automatic conversion. Wrapping only adds the GX container and thumbnail; it does
+not rewrite incompatible machine or toolpath commands. No actual-printer
+acceptance of converted files has been validated.
+
+Install the standalone converter in a Python 3.10+ environment (it installs its
+Pillow dependency and `gcode-to-gx` executable):
+
+```sh
+python3 -m pip install "git+https://github.com/HellEvro/FF_Gcode_to_GX.git"
+```
+
 ```sh
 ffadv4manager upload ~/Downloads/model.gcode
 ffadv4manager upload ~/Downloads/model.gcode --remote-name model.gcode
 ffadv4manager upload ~/Downloads/model.gcode --start
 ffadv4manager upload ~/Downloads/model.gcode --force
 ffadv4manager upload ~/Downloads/model.gcode --log-file /tmp/ad4-printer.jsonl
+ffadv4manager upload ~/Downloads/model.gcode --no-convert
+ffadv4manager convert ~/Downloads/model.gcode --output /tmp/model.gx
 ```
+
+`convert INPUT --output OUTPUT.gx` performs the same local-only conversion and
+checks the expected GX header/BMP layout. The converter must be on `PATH` as
+`gcode-to-gx`.
 
 The command displays upload progress and then reports that the `0:/user/NAME`
 file is listed. Preamble, M28, M29, and M661 replies are labeled on stderr;
@@ -322,7 +347,9 @@ post-processing hook section](../README.md#orcaslicer-linux-post-processing-hook
 and `scripts/orca_ad4_upload.py`. In the documented Linux contract, Orca
 appends the generated G-code path as a shell-quoted final argument; do not add a
 filename placeholder. The hook shares `ffadv4manager` config and supports `--host`,
-`--port`, `--timeout`, `--start`, and `--force`. `--start` is opt-in; without
+`--port`, `--timeout`, `--start`, `--force`, and `--no-convert`. It automatically
+converts supported G-code using the shared converter helper; see upload above
+for prerequisites and limitations. `--start` is opt-in; without
 `--force`, the hook fails closed if status cannot be read/parsed or the printer
 is not in a known idle `READY` state. The verified OrcaSlicer contract is
 version/build-dependent; consult the README caveat before relying on export

@@ -67,6 +67,9 @@ class FlashForgeClient:
         BMP header, or the complete bounded payload fail closed.
         """
         remote_path = _validated_remote_path(remote_name)
+        basename = remote_path.rsplit("/", 1)[-1]
+        if any(char.isspace() or ord(char) < 32 or ord(char) == 127 or char == ";" for char in basename):
+            raise ValueError("preview filename must not contain whitespace, controls, or semicolons")
         with self._connect(timeout=self.timeout) as sock:
             self._send_command(sock, f"M662 {remote_path}")
             return self._read_m662_bmp(sock, self.timeout, M662_MAX_BYTES)

@@ -95,3 +95,9 @@ def test_m662_rejects_incomplete_bmp(monkeypatch):
     monkeypatch.setattr(socket, "create_connection", lambda *_a, **_kw: fake)
     with pytest.raises(ProtocolError, match="complete M662 BMP"):
         FlashForgeClient("printer").preview_bmp("part.gx")
+
+
+def test_m662_rejects_gcode_injection_in_remote_filename(monkeypatch):
+    monkeypatch.setattr(socket, "create_connection", lambda *_a, **_kw: pytest.fail("must not connect"))
+    with pytest.raises(ValueError, match="semicolons"):
+        FlashForgeClient("printer").preview_bmp("part;M107.gx")

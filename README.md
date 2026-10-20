@@ -265,6 +265,30 @@ return nonzero, which OrcaSlicer treats as export failure under the verified
 contract. Usage/configuration errors return status 2; operational errors return
 status 1.
 
+## Local Three_Slicer Adventurer 4 UI
+
+The optional local web UI embeds the published Three_Slicer viewer/slicer with
+the bundled Adventurer 4 0.4 mm nozzle, process, and filament presets. It is a
+separate browser UI, not a native printer feature in upstream Three_Slicer.
+Configure the printer and build the web app once:
+
+```sh
+ffadv4manager config set --host 192.168.1.50
+cd web
+npm ci
+npm run build
+cd ..
+ffadv4manager slicer
+```
+
+The manager serves it only on `127.0.0.1:8765`. After slicing, choose **UPLOAD
+FILE** to upload only, or **UPLOAD + START** and confirm to request a print start.
+The local bridge invokes the existing CLI, which converts G-code to GX as needed.
+An accepted upload/start command is not proof that the printer stored the exact
+file or physically began printing; supervise first use. Requests are limited to
+64 MiB. The `three-slicer` npm package is AGPL-3.0-or-later; review its license
+obligations before redistributing a built application.
+
 ## GX converter attribution and license
 
 FFADV4Manager is distributed under the GNU General Public License v3.0 or later

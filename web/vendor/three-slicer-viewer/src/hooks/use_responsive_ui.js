@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { effectiveSheetSnap, focusTrapTarget, sheetSnapHeights, snapSheetHeight } from './use_responsive_layout.js'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { effectiveSheetSnap, focusTrapTarget, responsiveMeasureTargets, sheetSnapHeights, sheetSnapTransition, snapSheetHeight } from './use_responsive_layout.js'
 
 function focusableElements(root) {
   const result = []
@@ -24,15 +24,17 @@ export function useResponsiveUI(layout, appBodyRef) {
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [expandedInspectorOpen, setExpandedInspectorOpen] = useState(true)
   const [sheetSnap, setSheetSnap] = useState('collapsed')
+  const [shortEditing, setShortEditing] = useState(false)
   const [dragSheetHeight, setDragSheetHeight] = useState(null)
   const dragRef = useRef(null)
   const suppressHandleClickRef = useRef(false)
   const inspectorOpenButtonRef = useRef(null)
   const inspectorDialogRef = useRef(null)
   const restoreFocusRef = useRef(null)
-  const actionSurfaceRef = useRef(null)
+  const [actionSurfaceNode, setActionSurfaceNode] = useState(null)
+  const actionSurfaceRef = useCallback(node => setActionSurfaceNode(node), [])
   const [workspaceSize, setWorkspaceSize] = useState({ height: 0, actionHeight: 0 })
-  const effectiveSnap = effectiveSheetSnap(sheetSnap, layout.short)
+  const effectiveSnap = effectiveSheetSnap(sheetSnap, layout.short, shortEditing)
   const sheetStops = sheetSnapHeights(workspaceSize.height, workspaceSize.actionHeight)
   const sheetStyle = layout.variant === 'compact' ? {
     '--sheet-collapsed': `${sheetStops.collapsed}px`,
@@ -43,21 +45,23 @@ export function useResponsiveUI(layout, appBodyRef) {
 
   useEffect(() => {
     const body = appBodyRef.current
-    const action = actionSurfaceRef.current
     if (!body) return
     const measure = () => {
       const height = body.clientHeight
-      const actionHeight = action?.getBoundingClientRect().height ?? 0
+      const actionHeight = actionSurfaceNode?.getBoundingClientRect().height ?? 0
       setWorkspaceSize(current => current.height === height && current.actionHeight === actionHeight
         ? current : { height, actionHeight })
     }
     measure()
     if (typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(measure)
-    observer.observe(body)
-    if (action) observer.observe(action)
+    responsiveMeasureTargets(body, actionSurfaceNode).forEach(node => observer.observe(node))
     return () => observer.disconnect()
-  }, [appBodyRef, actionSurfaceRef, layout.variant])
+  }, [appBodyRef, actionSurfaceNode, layout.variant])
+
+  useEffect(() => {
+    if (layout.short) setShortEditing(false)
+  }, [layout.short])
 
   useEffect(() => {
     if (layout.variant !== 'intermediate' || !inspectorOpen) return
@@ -90,7 +94,7 @@ export function useResponsiveUI(layout, appBodyRef) {
     if (!drag) return
     if (Math.abs(event.clientY - drag.y) > 4) suppressHandleClickRef.current = true
     const available = appBodyRef.current?.clientHeight ?? 600
-    const actionHeight = actionSurfaceRef.current?.getBoundingClientRect().height ?? 0
+    const actionHeight = actionSurfaceNode?.getBoundingClientRect().height ?? 0
     const expanded = sheetSnapHeights(available, actionHeight).expanded
     setDragSheetHeight(Math.max(64, Math.min(expanded, drag.height + drag.y - event.clientY)))
   }
@@ -98,17 +102,30 @@ export function useResponsiveUI(layout, appBodyRef) {
     const drag = dragRef.current
     if (!drag) return
     const available = appBodyRef.current?.clientHeight ?? 600
-    const actionHeight = actionSurfaceRef.current?.getBoundingClientRect().height ?? 0
+    const actionHeight = actionSurfaceNode?.getBoundingClientRect().height ?? 0
     const velocity = (drag.y - event.clientY) / Math.max(1, event.timeStamp - drag.time)
     const height = Math.max(64, Math.min(sheetSnapHeights(available, actionHeight).expanded, drag.height + drag.y - event.clientY))
     setWorkspaceSize({ height: available, actionHeight })
-    setSheetSnap(snapSheetHeight(height, velocity, available, actionHeight))
+    requestSheetSnap(snapSheetHeight(height, velocity, available, actionHeight))
     cancelSheetDrag()
   }
   function cancelSheetDrag() { dragRef.current = null; setDragSheetHeight(null) }
+  function requestSheetSnap(requested) {
+    const next = sheetSnapTransition(sheetSnap, layout.short, shortEditing, requested)
+    setSheetSnap(next.preferred)
+    setShortEditing(next.shortEditing)
+  }
+  function stepSheet() {
+    if (layout.short) { requestSheetSnap(effectiveSnap === 'expanded' ? 'collapsed' : 'expanded'); return }
+    setSheetSnap(value => value === 'collapsed' ? 'half' : value === 'half' ? 'expanded' : 'collapsed')
+  }
+  function returnToScene() {
+    requestSheetSnap('collapsed')
+    if (layout.variant === 'compact') setInspectorOpen(false)
+  }
   function handleSheetClick(event) {
     if (suppressHandleClickRef.current) { suppressHandleClickRef.current = false; event.preventDefault(); return }
-    setSheetSnap(value => value === 'collapsed' ? 'half' : value === 'half' ? 'expanded' : 'collapsed')
+    stepSheet()
   }
   function openInspector() {
     restoreFocusRef.current = inspectorOpenButtonRef.current
@@ -117,7 +134,7 @@ export function useResponsiveUI(layout, appBodyRef) {
 
   return {
     inspectorOpen, setInspectorOpen, expandedInspectorOpen, setExpandedInspectorOpen,
-    sheetSnap, setSheetSnap, effectiveSnap, sheetStyle, dragging: dragSheetHeight != null,
+    sheetSnap, requestSheetSnap, stepSheet, returnToScene, effectiveSnap, sheetStyle, dragging: dragSheetHeight != null,
     inspectorOpenButtonRef, inspectorDialogRef, actionSurfaceRef, onModalKeyDown, openInspector,
     beginSheetDrag, moveSheetDrag, finishSheetDrag, cancelSheetDrag, handleSheetClick,
   }

@@ -24,8 +24,18 @@ export function snapSheetHeight(height, velocityY, availableHeight, actionHeight
   return stops.reduce((best, stop) => Math.abs(snaps[stop] - height) < Math.abs(snaps[best] - height) ? stop : best, stops[0])
 }
 
-export function effectiveSheetSnap(preferred, short) {
-  return short ? 'collapsed' : preferred
+export function effectiveSheetSnap(preferred, short, shortEditing = false) {
+  return short ? (shortEditing ? 'expanded' : 'collapsed') : preferred
+}
+
+export function sheetSnapTransition(preferred, short, shortEditing, requested) {
+  return short
+    ? { preferred, shortEditing: requested !== 'collapsed' }
+    : { preferred: requested, shortEditing }
+}
+
+export function responsiveMeasureTargets(body, actionSurface) {
+  return [body, actionSurface].filter(Boolean)
 }
 
 export function focusTrapTarget(index, count, backwards) {

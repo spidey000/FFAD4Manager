@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { deriveResponsiveLayout, effectiveSheetSnap, focusTrapTarget, sheetSnapHeights, snapSheetHeight } from '../src/hooks/use_responsive_layout.js'
+import { deriveResponsiveLayout, effectiveSheetSnap, focusTrapTarget, responsiveMeasureTargets, sheetSnapHeights, sheetSnapTransition, snapSheetHeight } from '../src/hooks/use_responsive_layout.js'
 
 test('responsive layout uses container dimensions and scene fit', () => {
   assert.deepEqual(deriveResponsiveLayout(767, 800), { variant: 'compact', short: false })
@@ -38,6 +38,25 @@ test('sheet stops use the measured action surface and reserve visible scene spac
 
   const tooShort = sheetSnapHeights(200, 50)
   assert.deepEqual(tooShort, { collapsed: 64, half: 64, expanded: 150 })
+})
+
+test('short-height editing expands temporarily without replacing the taller snap preference', () => {
+  const open = sheetSnapTransition('half', true, false, 'half')
+  assert.deepEqual(open, { preferred: 'half', shortEditing: true })
+  assert.equal(effectiveSheetSnap(open.preferred, true, open.shortEditing), 'expanded')
+
+  const returned = sheetSnapTransition(open.preferred, true, open.shortEditing, 'collapsed')
+  assert.deepEqual(returned, { preferred: 'half', shortEditing: false })
+  assert.equal(effectiveSheetSnap(returned.preferred, true, returned.shortEditing), 'collapsed')
+  assert.equal(effectiveSheetSnap(returned.preferred, false, returned.shortEditing), 'half')
+})
+
+test('action-surface measurement target list follows its mount lifecycle', () => {
+  const body = {}
+  const action = {}
+  assert.deepEqual(responsiveMeasureTargets(body, null), [body])
+  assert.deepEqual(responsiveMeasureTargets(body, action), [body, action])
+  assert.deepEqual(responsiveMeasureTargets(body, null), [body])
 })
 
 test('modal focus wraps at either end but lets interior Tab movement proceed', () => {

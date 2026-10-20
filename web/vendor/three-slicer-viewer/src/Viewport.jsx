@@ -83,7 +83,8 @@ export default function Viewport({
   const appBodyRef = useRef(null)
   const layout = useResponsiveLayout(shellRef)
   const responsiveUI = useResponsiveUI(layout, appBodyRef)
-  const { inspectorOpen, setInspectorOpen, expandedInspectorOpen, setExpandedInspectorOpen, sheetSnap, setSheetSnap,
+  const { inspectorOpen, setInspectorOpen, expandedInspectorOpen, setExpandedInspectorOpen,
+    requestSheetSnap, stepSheet, returnToScene,
     effectiveSnap, sheetStyle, inspectorOpenButtonRef, inspectorDialogRef, actionSurfaceRef, onModalKeyDown, openInspector,
     beginSheetDrag, moveSheetDrag, finishSheetDrag, cancelSheetDrag, handleSheetClick } = responsiveUI
   const compact = layout.variant === 'compact'
@@ -803,7 +804,7 @@ export default function Viewport({
         {/* S4 right sidebar */}
         {ok && showPanel('sidebar') && (
           <Panel panels={panels} name="sidebar"><aside ref={inspectorDialogRef} className="sidebar" data-sidebar-open={layout.variant === 'expanded' && expandedInspectorOpen || undefined} style={sheetStyle} aria-label={intermediate ? 'Settings inspector' : 'Inspector'} role={intermediate && inspectorOpen ? 'dialog' : undefined} aria-modal={intermediate && inspectorOpen ? 'true' : undefined} tabIndex={intermediate && inspectorOpen ? -1 : undefined}>
-            <InspectorControls compact={compact} intermediate={intermediate} expanded={layout.variant === 'expanded'} snap={effectiveSnap} onStep={() => setSheetSnap(value => value === 'collapsed' ? 'half' : value === 'half' ? 'expanded' : 'collapsed')} onReturn={() => setSheetSnap('collapsed')}
+            <InspectorControls compact={compact} intermediate={intermediate} expanded={layout.variant === 'expanded'} snap={effectiveSnap} onStep={stepSheet} onReturn={returnToScene}
               onDown={beginSheetDrag} onMove={moveSheetDrag} onUp={finishSheetDrag} onCancel={cancelSheetDrag} onHandleClick={handleSheetClick} onClose={() => setInspectorOpen(false)} onFold={() => setExpandedInspectorOpen(false)} />
             <div className="sidebar-scroll">
               {showPanel('printerCard') && (
@@ -890,7 +891,7 @@ export default function Viewport({
         {ok && showPanel('sidebar') && layout.variant === 'expanded' && <ExpandedInspectorActions open={expandedInspectorOpen} onOpen={() => setExpandedInspectorOpen(true)}>{showPanel('sliceBar') && sliceAction}</ExpandedInspectorActions>}
         {ok && showPanel('sidebar') && compact && showPanel('sliceBar') && <div ref={actionSurfaceRef} className="compact-action-surface">{sliceAction}</div>}
       </div>
-      {compact && <MobileNavigation canvasMode={canvasMode} inspectorOpen={inspectorOpen} canPrepare={!gcodeOnly} canPreview={layerCount > 0} onPrepare={() => { if (!gcodeOnly) enterCanvasMode('prepare'); setInspectorOpen(false); setSheetSnap('collapsed') }} onSettings={() => { setInspectorOpen(true); setSheetSnap('half') }} onLayers={() => { if (layerCount) { enterCanvasMode('preview'); setInspectorOpen(true); setSheetSnap('half') } }} />}
+      {compact && <MobileNavigation canvasMode={canvasMode} inspectorOpen={inspectorOpen} canPrepare={!gcodeOnly} canPreview={layerCount > 0} onPrepare={() => { if (!gcodeOnly) enterCanvasMode('prepare'); setInspectorOpen(false); requestSheetSnap('collapsed') }} onSettings={() => { setInspectorOpen(true); requestSheetSnap('half') }} onLayers={() => { if (layerCount) { enterCanvasMode('preview'); setInspectorOpen(true); requestSheetSnap('half') } }} />}
       {intermediate && <IntermediateInspectorControls open={inspectorOpen} openButtonRef={inspectorOpenButtonRef} onOpen={openInspector} onScrim={() => setInspectorOpen(false)} />}
     </div>
     </ShadowHost>

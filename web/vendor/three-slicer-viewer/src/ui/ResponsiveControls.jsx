@@ -32,7 +32,7 @@ export function MobileNavigation({ canvasMode, inspectorOpen, canPrepare, canPre
 
 export function IntermediateInspectorControls({ open, openButtonRef, onOpen, onScrim }) {
   return <>
-    {open && <button className="inspector-scrim" aria-label="Close settings" onClick={onScrim} />}
+    {open && <div className="inspector-scrim" role="presentation" aria-hidden="true" onPointerDown={onScrim} />}
     <button ref={openButtonRef} className="inspector-open" onClick={onOpen} aria-label="Open settings">Settings</button>
   </>
 }

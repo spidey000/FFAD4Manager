@@ -293,6 +293,8 @@ def main(argv: list[str] | None = None) -> int:
     profile_delete = profiles_sub.add_parser("delete")
     profile_delete.add_argument("name")
 
+    sub.add_parser("slicer", help="Start the loopback-only local Three_Slicer UI")
+
     config_cmd = sub.add_parser("config", help="View or edit stored connection defaults")
     config_sub = config_cmd.add_subparsers(dest="config_action", required=True)
     config_sub.add_parser("show", help="Print the stored config")
@@ -318,6 +320,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "profiles":
         return _handle_profiles(args)
+
+    if args.command == "slicer":
+        from ffadv4manager.slicer_bridge import serve
+
+        try:
+            serve()
+            return 0
+        except Exception as exc:  # noqa: BLE001
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
 
     if args.command == "inspect":
         try:

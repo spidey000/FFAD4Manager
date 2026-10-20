@@ -11,6 +11,11 @@ import './style.css'
 
 const PRINTER = 'Flashforge Adventurer 4 Series 0.4 Nozzle'
 const token = document.querySelector('meta[name="ffadv4manager-token"]')?.content ?? ''
+const settingsFingerprint = value => JSON.stringify(value, (_key, item) => (
+  item && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b)))
+    : item
+))
 
 function App() {
   const [settings, setSettings] = useState(() => printerSettings(PRINTER) ?? {})
@@ -18,7 +23,7 @@ function App() {
   const [preset, setPreset] = useState('')
   const [material, setMaterial] = useState('')
   const [machineMissing, setMachineMissing] = useState(false)
-  const [gcode, setGcode] = useState('')
+  const [sliceArtifact, setSliceArtifact] = useState(null)
   const [filename, setFilename] = useState('adventurer4_print.gcode')
   const [sliceRequest, setSliceRequest] = useState(0)
   const [progress, setProgress] = useState(0)
@@ -47,6 +52,15 @@ function App() {
 
   const processNames = useMemo(() => catalogs.processes?.listFor(PRINTER) ?? [], [catalogs.processes])
   const filamentNames = useMemo(() => catalogs.filaments?.listFor(PRINTER).map(item => item.name) ?? [], [catalogs.filaments])
+  const currentSettingsFingerprint = settingsFingerprint(settings)
+  const artifactIsCurrent = Boolean(sliceArtifact && sliceArtifact.settingsFingerprint === currentSettingsFingerprint)
+
+  useEffect(() => {
+    if (sliceArtifact && !artifactIsCurrent) {
+      setSliceArtifact(null)
+      setBridgeState({ kind: 'stale', text: 'Settings changed — slice again before sending' })
+    }
+  }, [artifactIsCurrent, sliceArtifact])
 
   function chooseProcess(name) {
     setPreset(name)
@@ -61,14 +75,17 @@ function App() {
   }
 
   async function sendPrint(start) {
-    if (!gcode) return
+    if (!artifactIsCurrent) {
+      setBridgeState({ kind: 'stale', text: 'Settings changed — slice again before sending' })
+      return
+    }
     if (start && !window.confirm(`Upload “${filename}” and start printing on the Adventurer 4?`)) return
     setBridgeState({ kind: 'working', text: start ? 'Uploading and starting…' : 'Uploading file…' })
     try {
       const response = await fetch('/api/print', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ filename, gcode, start }),
+        body: JSON.stringify({ filename, gcode: sliceArtifact.gcode, start }),
       })
       const result = await response.json()
       setBridgeState(result.success
@@ -117,7 +134,10 @@ function App() {
         defaultAutoSlice={false}
         slicer={useSlicer}
         sliceRequest={sliceRequest || null}
-        onSliced={({ gcode: result }) => { setGcode(result); setBridgeState({ kind: 'ready', text: 'Slice complete — review before sending' }) }}
+        onSliced={({ gcode: result }) => {
+          setSliceArtifact({ gcode: result, settingsFingerprint: currentSettingsFingerprint })
+          setBridgeState({ kind: 'ready', text: 'Slice complete — review before sending' })
+        }}
         onEvent={event => {
           if (event.type === 'slicing') setSlicing(event.value)
           if (event.type === 'progress') setProgress(Math.round(event.value * 100))
@@ -125,7 +145,11 @@ function App() {
         }}
         onExport={(file, name) => {
           if (name.toLowerCase().endsWith('.gcode')) {
-            file.text().then(text => { setGcode(text); setFilename(name) })
+            file.text().then(text => {
+              setSliceArtifact({ gcode: text, settingsFingerprint: currentSettingsFingerprint })
+              setFilename(name)
+              setBridgeState({ kind: 'ready', text: 'G-code ready — review before sending' })
+            })
             return true
           }
           return false
@@ -138,8 +162,8 @@ function App() {
       <div className="send-actions">
         <div className="send-status" role="status" aria-live="polite"><span className={`status-led ${bridgeState.kind}`} />{bridgeState.text}</div>
         {slicing && <div className="progress-line" aria-label={`Slicing ${progress}%`}><span style={{ width: `${progress}%` }} /></div>}
-        {gcode && <label className="filename-field"><span>G-CODE FILE</span><input value={filename} onChange={event => setFilename(event.target.value)} aria-label="G-code filename" /></label>}
-        <div className="buttons"><button className="button button-secondary" onClick={() => sendPrint(false)} disabled={!gcode || slicing}>UPLOAD FILE <span>↗</span></button><button className="button button-primary" onClick={() => sendPrint(true)} disabled={!gcode || slicing}>UPLOAD + START <span>→</span></button></div>
+        {sliceArtifact && artifactIsCurrent && <label className="filename-field"><span>G-CODE FILE</span><input value={filename} onChange={event => setFilename(event.target.value)} aria-label="G-code filename" /></label>}
+        <div className="buttons"><button className="button button-secondary" onClick={() => sendPrint(false)} disabled={!artifactIsCurrent || slicing}>UPLOAD FILE <span>↗</span></button><button className="button button-primary" onClick={() => sendPrint(true)} disabled={!artifactIsCurrent || slicing}>UPLOAD + START <span>→</span></button></div>
         <p className="send-footnote">START asks for confirmation before the printer receives a start command.</p>
       </div>
     </section>

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "vite build",
+    "build": "npm run build --prefix vendor/three-slicer-viewer && vite build",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
@@ -13,7 +13,7 @@
     "react-dom": "^18.3.1",
     "three": "^0.160.1",
     "three-slicer": "0.3.5",
-    "three-slicer-viewer": "0.3.5"
+    "three-slicer-viewer": "file:vendor/three-slicer-viewer"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",

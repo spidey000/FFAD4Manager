@@ -1,0 +1,133 @@
+// Where the prime tower stands, per plate — the same rules the slicer applies, so the drawn stand-in and the
+//  sliced tower are the same tower. Pure arithmetic on settings + the plate's model bounds, kept out of the
+//  component because "the box shows where it will actually print" is a claim only an assertion can hold up.
+import { bedCenter } from '../settings/bed_frame.js'
+
+/**
+ * Will this plate actually change tools — the question the tower exists to answer.
+ *
+ * Loading a second filament is not it. A prime tower purges the nozzle ACROSS a tool change, so with two filaments
+ * loaded and everything printing on T1 the slice never emits a `T` command and never builds a tower — but the
+ * stand-in used to draw for the whole session anyway, a green box beside a model that would print without it.
+ *
+ * The two conditions are the ones `buildParams` raises `extruder_count` on (use_slicer.js), which is in turn what
+ * the kernel gates its multi-tool path on: whole-object assignment to more than one extruder, or material paint
+ * reaching extruder 2 or higher. Selector state 1 is the default tool (ENFORCER == Extruder1), so painting in
+ * state 1 alone switches nothing.
+ *
+ * `support_filament` is deliberately not a third condition: on its own it does not raise `extruder_count`, so the
+ * kernel emits no tool change for it either, and a box drawn for it would promise a tower the slice will not build.
+ *
+ * @param objects the object list as the component holds it (`{extruder, visible}`)
+ * @param paintStateCounts painted facet count per selector state, as the paint brush reports it
+ */
+export function usesMultipleTools(objects, paintStateCounts, filamentCount = Infinity) {
+  const assigned = new Set((objects ?? []).filter(o => o?.visible !== false).map(o => Number(o?.extruder) || 1))
+  if (assigned.size > 1) return true
+  // Paint for a filament that is not configured is not a tool change — the slice leaves it out too
+  //  (paint_store.js paintedExtruderCount).
+  return Object.entries(paintStateCounts ?? {})
+    .some(([state, facets]) => facets > 0 && Number(state) >= 2 && Number(state) <= filamentCount)
+}
+
+/** Read a per-plate tower coordinate out of the settings map. `wipe_tower_x`/`_y` are upstream's per-plate
+ *  ARRAYS, so each plate reads its own entry — a hole (null) means auto for that plate only. A legacy scalar
+ *  still applies to every plate alike. NaN means "not chosen", which is what turns on auto placement. */
+export function chosenTowerCoord(settings, key, plate) {
+  const raw = settings?.[key]
+  const value = Array.isArray(raw) ? raw[plate] : raw
+  const asNumber = Number(value)
+  return (value != null && value !== '' && Number.isFinite(asNumber)) ? asNumber : NaN
+}
+
+
+const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi)
+export const AUTO_GAP = 5                  // mm between the model and an auto-placed tower
+export const AUTO_EDGE_MARGIN_MM = 1       // how far inside the bed edge the SLICE keeps an auto-placed tower
+export const RING_TOWER_SIDE_MM = 15       // the fallback ring's fixed footprint (params.h prime_tower_ring_size)
+export const REAL_TOWER_DEFAULT_WIDTH_MM = 30   // the kernel's prime_tower_width when nothing reaches it
+
+/** One box per plate that gets a tower, in the bed-centred world coordinates the objects use.
+ *  Every plate slices with its own tower (the kernel is per-plate), so every plate with objects gets one.
+ *  An empty plate gets none: the kernel has nothing to slice there, so a box would promise a tower that
+ *  never prints.
+ *  `modelBounds(plate)` and `plateOrigin(plate)` are the scene's; everything else is arithmetic.
+ *  Returns null when there is no tower at all, which is what the scene takes as "remove them". */
+export function towerBoxes({ plateCount, size: sharedSize, bedWidth, bedDepth, bedOf, towerOf, settings, modelBounds, plateOrigin }) {
+  const boxes = []
+  for (let plate = 0; plate < plateCount; plate++) {
+    const box = modelBounds(plate)
+    if (!box) continue
+    // `towerOf(plate)` is the plate's own answer to "is there a tower, and how wide" (its effective settings and
+    //  its own tool changes); without it every plate gets the shared `size`, as before per-plate settings.
+    const { on = true, size = sharedSize } = towerOf?.(plate) ?? {}
+    if (!on) continue
+    // Each plate is clamped to ITS bed (`bedOf(plate)`, the plate context); the scalars remain for a uniform caller.
+    //  `center` is that bed's centre in printer coordinates (settings bedCenter), which wipe_tower_x/y are written in.
+    const { w: bedW = bedWidth, d: bedD = bedDepth, center = bedCenter({ bed_width: bedW, bed_depth: bedD }) } = bedOf?.(plate) ?? {}
+    const setX = chosenTowerCoord(settings, 'wipe_tower_x', plate)
+    const setY = chosenTowerCoord(settings, 'wipe_tower_y', plate)
+    const auto = !Number.isFinite(setX)
+    // The box is drawn in world coordinates and a bed coordinate is plate-local, so the plate's own origin is
+    //  the one conversion between them — the same origin the slice frame subtracts.
+    const origin = plateOrigin(plate) ?? { x: 0, z: 0 }
+    // Auto mirrors use_slicer's placement exactly: one gap to the model's left, level with the model's middle,
+    //  clamped to the bed. Both read the same box in the same frame, so the drawn tower is the sliced one.
+    const x = auto ? origin.x + clamp(box.minX - origin.x - AUTO_GAP - size / 2, -bedW / 2 + size / 2, bedW / 2 - size / 2)
+                   : origin.x + setX - center.x + size / 2
+    const y = auto ? -origin.z + clamp((box.minY + box.maxY) / 2 + origin.z, -bedD / 2 + size / 2, bedD / 2 - size / 2)
+                   : -origin.z + setY - center.y + size / 2
+    boxes.push({ plate, x, y, size, height: Math.max(2, box.height) })
+  }
+  return boxes.length ? boxes : null
+}
+
+/** The selection rule for the tower stand-in. The tower is a setting drawn as a box, not an object: its drag
+ *  commit reports a position and nothing else, so it is selected ALONE (a multi-selection drag moves a pivot and
+ *  never reports — the box snapped back on the next redraw) and only TRANSLATED (a rotation stuck on the box, and
+ *  a scale drag shifted the reported corner by half the stretch). The primary decides: a tower primary drops
+ *  everything else, an object primary drops the tower. Mutates `selection` (a Set); returns true when what is
+ *  left is the tower alone, which is the gizmo's cue to stay in translate mode. */
+export function towerSelectionRule(selection, primary, isTower) {
+  if (selection.size > 1 && [...selection].some(isTower)) {
+    if (isTower(primary)) { selection.clear(); selection.add(primary) }
+    else for (const item of [...selection]) if (isTower(item)) selection.delete(item)
+  }
+  return selection.size === 1 && isTower([...selection][0])
+}
+
+/** The tower's footprint (mm) as the kernel builds it: the real WipeTower's width, or the fallback ring's fixed 15.
+ *  `params` is the plate's DERIVED kernel parameters, not the settings map — an unset `prime_tower_width` reaches
+ *  the kernel as the schema default (60), which a raw read of the map cannot see. Same rule as buildParams' auto
+ *  placement (use_slicer.js). */
+export function towerFootprint(params, real) {
+  if (!real) return RING_TOWER_SIDE_MM
+  if (params?.prime_tower_width > 0) return params.prime_tower_width
+  return REAL_TOWER_DEFAULT_WIDTH_MM
+}
+
+/** A chosen tower position kept on the bed: `x`/`y` are the tower's CORNER in printer coordinates (what the kernel
+ *  reads as prime_tower_x/y), the bed runs from `origin` (settings bedOrigin) for bedW x bedD, so the far edge is
+ *  the bed's end minus the footprint. A drag or a typed value
+ *  used to be stored as given, and a tower off the bed was only discovered in the sliced result. */
+export function clampTowerPosition(x, y, { bedW, bedD, size, origin = { x: 0, y: 0 } }) {
+  const keep = (value, start, extent) => {
+    if (!(Number.isFinite(extent) && extent > size)) return Number(value)
+    return clamp(Number(value), start, start + extent - size)
+  }
+  return [keep(x, origin.x, bedW), keep(y, origin.y, bedD)]
+}
+
+// The tower's own outcome, so the card can show settings and result together. Tool changes are counted from the
+// G-CODE rather than read from the stats block: the kernel reports them only in the (opt-in) stats, and the card
+// must not depend on that being switched on. `params` is the last slice's kernel parameters — the placement the
+// tower was actually built at, which may be the auto one rather than anything the user typed.
+export function towerResultStats(result, params) {
+  const stats = result?.stats
+  if (!stats || !Number.isFinite(stats.filament_mm_purge)) return null
+  return {
+    purge: stats.filament_mm_purge,
+    changes: (result.gcode?.match(/^T\d+$/gm) ?? []).length,
+    x: params?.prime_tower_x, y: params?.prime_tower_y,
+  }
+}

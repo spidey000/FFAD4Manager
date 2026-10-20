@@ -1,0 +1,864 @@
+// Settings-map transforms that need no vendor catalog: schema-typed coercion, the 3mf project codecs,
+// kernel/SLA parameter derivation, preset application, and the preset-file codecs re-exported at the end.
+//
+// Split out of settings.js so it can ship in the permissive viewer package (packages/RELICENSE.md): nothing
+// in here reads upstream's authored text or the vendor catalogs, both of which stay with the AGPL package.
+// settings.js re-exports all of this, so `three-slicer/settings` is unchanged for every consumer.
+
+// Maps the actual values of the (editable) right-hand settings panel -> kernel slice parameters.
+//  - Settings state is a sparse map (key->value): only edited keys are stored, otherwise the config-schema default.
+//  - For vector types (coFloats/coInts, …) only the first element is used/edited (simplification).
+// The REDUCED schema is enough here: this file reads .type, .default, enum_values and, for the SLA
+//  contract, defined_in/line — never a label or a tooltip. Aliased so the call sites read as before.
+import { leanSchema as schema } from './data.js'
+import { FFF_FALLBACKS, AUTO_LINE_WIDTH, SLA_FALLBACKS, MACHINE_LIMITS, BED_FALLBACK } from './kernel_defaults.js'
+
+export function schemaDefault(key) { return schema[key]?.default }
+export function settingRaw(settings, key) {
+  if (settings && key in settings) return settings[key]
+  return schemaDefault(key)
+}
+// Normalize to a scalar ([0] for vectors)
+// A per-extruder column reduced to the single value the kernel's scalar reader wants. The FIRST SET entry, not
+//  literally index 0: the filament card writes one column per extruder and leaves a null wherever that extruder has
+//  no preset, so an assignment that starts at T2 puts a null at index 0. Taking that null made filament_diameter 0,
+//  which divides into the extrusion maths and turned the whole slice into NaN — measured as
+//  "; filament used [mm] = nan, nan" from a print whose T1 had no material picked.
+export function settingScalar(settings, key) {
+  const v = settingRaw(settings, key)
+  if (!Array.isArray(v)) return v
+  return v.find(entry => entry != null && entry !== '') ?? v[0]
+}
+
+// Stage 8: real ported Fill patterns (gyroid TPMS/honeycomb/3dhoneycomb/crosshatch/concentric) + the older approximations
+const KERNEL_PATTERNS = ['rectilinear', 'grid', 'triangles', 'zigzag', 'gyroid', 'gyroid_approx',
+  'honeycomb', '3dhoneycomb', 'crosshatch', 'concentric']
+const KERNEL_SEAMS = ['nearest', 'aligned', 'back', 'random']
+
+// ---- Pass-through kernel parameters -----------------------------------------------------------------------
+// The kernel reads 159 parameters (see the reference table in engine/PARAMS.md, generated from its own reader).
+//  These are the ones whose schema key carries the SAME name, so the mapping is the identity and the only real
+//  decision is WHEN to send them. They are sent only when the settings map actually holds the key — never filled
+//  in from the schema default — because the two defaults disagree for several of them:
+//  independent_support_layer_height is true in the schema and false in the kernel, printable_height is 100 there
+//  and 250 here. Filling one in would silently reslice every existing caller's model. This is the same omission
+//  rule the per-feature widths, the support tools and the prime tower keys already follow, and it is what keeps
+//  deriveKernelParams({}) producing exactly the parameter set it produced before these keys were mapped.
+const PASSTHROUGH_NUM = [
+  // Real (organic) tree support shape. Upstream keeps an _organic spelling and a suffix-less one for most of
+  //  these, and the kernel accepts both — preferring _organic — so both are passed as written rather than
+  //  reconciled here. Before this, none of the organic tree support could be tuned from a settings map at all.
+  'tree_support_branch_angle', 'tree_support_branch_angle_organic',
+  'tree_support_branch_diameter', 'tree_support_branch_diameter_organic',
+  'tree_support_branch_distance', 'tree_support_branch_distance_organic',
+  'tree_support_branch_diameter_angle', 'tree_support_angle_slow', 'tree_support_tip_diameter',
+  'tree_support_top_rate', 'tree_support_wall_count',
+  'support_object_first_layer_gap',
+  // The tree support's build-volume ceiling. Distinct from bed_height above — that one is the kernel's own
+  //  off-the-bed check — but both come from this single schema key, because upstream has one option for both jobs.
+  'printable_height',
+  // Upstream's *_filament_id family: a 1-based filament index per feature, 0 meaning "whatever tool the region
+  //  already prints with". slice_mm.cpp honours the wall and sparse-infill ids and reports the rest in the G-code
+  //  rather than silently dropping them.
+  'outer_wall_filament_id', 'inner_wall_filament_id', 'sparse_infill_filament_id',
+  'top_surface_filament_id', 'bottom_surface_filament_id', 'internal_solid_filament_id',
+  // Read by the kernel's classic wall generator (wall_generator = classic).
+  'filter_out_gap_fill',
+  // Upstream's flow multipliers (GCode.cpp:7343-7390): the print-wide one and each role's own (emit.cpp role_flow_ratio).
+  'print_flow_ratio', 'top_solid_infill_flow_ratio', 'bottom_solid_infill_flow_ratio', 'bridge_flow', 'brim_flow_ratio',
+  'scarf_joint_flow_ratio', 'outer_wall_flow_ratio', 'inner_wall_flow_ratio', 'sparse_infill_flow_ratio',
+  'internal_solid_infill_flow_ratio', 'gap_fill_flow_ratio', 'support_flow_ratio', 'support_interface_flow_ratio',
+  'first_layer_flow_ratio',
+  // Added to every Z the G-code writes (upstream's GCodeWriter).
+  'z_offset',
+]
+const PASSTHROUGH_BOOL = ['independent_support_layer_height',
+  // The machine's E mode and firmware retraction (upstream GCodeWriter), each a printer profile option.
+  'use_relative_e_distances', 'use_firmware_retraction',
+  'detect_thin_wall', 'precise_outer_wall', 'only_one_wall_first_layer', 'alternate_extra_wall',
+  // thick_bridges picks upstream's round bridge thread; set_other_flow_ratios turns the per-role ratios on.
+  'thick_bridges', 'set_other_flow_ratios']
+// coPercent options. A 3mf import delivers "15%" while the schema default is the bare 15, so the sign is stripped and
+//  the kernel gets the number of percent either way.
+const PASSTHROUGH_PERCENT = ['infill_wall_overlap', 'top_bottom_infill_wall_overlap']
+// coEnum options the kernel reads by their upstream spelling.
+const PASSTHROUGH_STR = ['wall_sequence', 'wall_direction']
+// Per-filament vectors, one entry per filament, passed positionally like every other per-extruder array.
+//  filament_map is which physical extruder each filament sits in; density and cost turn extruded millimetres into
+//  the grams and currency the G-code footer reports. gap_infill_speed is per extruder rather than per filament; the
+//  kernel reads its first entry, the wall filament's on the single-material path. filament_max_volumetric_speed caps
+//  every extrusion's speed as upstream does (GCode.cpp:7492).
+const PASSTHROUGH_NUM_VECTOR = ['filament_map', 'filament_density', 'filament_cost', 'gap_infill_speed', 'filament_max_volumetric_speed']
+// Per-role speed, acceleration and jerk, upstream's GCode::_extrude and travel_to (GCode.cpp:7292-7342, :7393-7473,
+//  :8289-8333). Sent under the upstream names, only when the map holds the key (or the map carries a custom G-code,
+//  see followsTemplate). A percent option is resolved against the option upstream takes it as a ratio over
+//  (PrintConfig ratio_over), the second entry. The kernel keeps print_speed for every role it gets no speed for, and
+//  writes no acceleration or jerk at all without default_acceleration / default_jerk.
+const MOTION_KEYS = [
+  ['inner_wall_speed'], ['sparse_infill_speed'], ['internal_solid_infill_speed'], ['top_surface_speed'],
+  ['support_speed'], ['support_interface_speed'], ['initial_layer_infill_speed'], ['skirt_speed'], ['slow_down_layers'],
+  ['small_perimeter_speed', 'outer_wall_speed'], ['small_perimeter_threshold'],
+  ['initial_layer_travel_speed', 'travel_speed'],
+  ['default_acceleration'], ['outer_wall_acceleration'], ['inner_wall_acceleration'], ['top_surface_acceleration'],
+  ['sparse_infill_acceleration', 'default_acceleration'], ['internal_solid_infill_acceleration', 'default_acceleration'],
+  ['bridge_acceleration', 'outer_wall_acceleration'], ['initial_layer_acceleration'], ['travel_acceleration'],
+  ['initial_layer_travel_acceleration', 'travel_acceleration'],
+  ['default_jerk'], ['outer_wall_jerk'], ['inner_wall_jerk'], ['top_surface_jerk'], ['infill_jerk'], ['initial_layer_jerk'],
+  ['travel_jerk'], ['initial_layer_travel_jerk', 'travel_jerk'],
+  // The writer's clamps (GCodeWriter::apply_print_config) and Klipper's ACCEL_TO_DECEL.
+  ['machine_max_acceleration_extruding'], ['machine_max_acceleration_travel'], ['machine_max_acceleration_y'], ['machine_max_jerk_y'],
+  ['accel_to_decel_factor'],
+]
+const MOTION_BOOLS = ['accel_to_decel_enable']
+
+// Material identity. The kernel needs the type for the two decisions upstream makes by material name (PETG's
+//  extra unretract, TPU on the first layer) and the settings id for the footer.
+const PASSTHROUGH_STR_VECTOR = ['filament_type', 'filament_settings_id']
+
+// The schema keys the machine limits are read from — for UI that has to show "which printer characteristics are in play"
+// without hardcoding key strings of its own.
+export const machineLimitKeys = Object.values(MACHINE_LIMITS).map(([key]) => key)
+
+// ---- Printer profiles -------------------------------------------------------
+
+// ---- Imported project settings (a slicer-written 3mf's Metadata/project_settings.config) --------------------
+// Upstream serializes every option as a STRING (or an array of them, one per extruder) — a bool is "0"/"1" and a
+//  float is "0.2". This settings map holds real JS types, and the difference is not cosmetic: `bool()` below reads
+//  a value with `!!v`, and `!!"0"` is TRUE — importing raw would turn every disabled option on. So each value is
+//  coerced by its schema type, and anything the schema does not know (inherits_group, *_settings_id, version, the
+//  whole preset-bookkeeping half of that file) is dropped rather than carried into a map keyed by schema keys.
+// The `inherits` / `different_settings_to_system` machinery upstream applies on top of this (Preset.cpp:2577) is
+//  deliberately NOT reproduced: it exists to reconcile a stored preset against a LOCAL vendor preset database of a
+//  possibly different version. project_settings.config is already flattened, so taking its values as written is
+//  both simpler and closer to what the project author actually sliced.
+const FALSE_STRINGS = new Set(['0', 'false', 'no', 'off', ''])
+
+function coerceScalar(type, value) {
+  if (typeof value !== 'string') return value
+  switch (type) {
+    case 'coBool': case 'coBools':
+      return !FALSE_STRINGS.has(value.trim().toLowerCase())
+    case 'coFloat': case 'coFloats': case 'coInt': case 'coInts':
+      return asNumber(value)
+    case 'coPercent': case 'coPercents':
+      // A percent option's value is the bare number (the schema default of sparse_infill_density is 20, not "20%")
+      //  and upstream serializes it that way — but the '%' does show up in hand-edited configs, so strip it.
+      return asNumber(value.trim().replace(/%$/, ''))
+    case 'coFloatOrPercent': case 'coFloatsOrPercents':
+      // "50%" must stay a string — the percent IS the value, and Number('50%') is NaN anyway.
+      if (value.trim().endsWith('%')) return value
+      return asNumber(value)
+    case 'coPoint': case 'coPoints':
+      return parsePoint(value) ?? value
+    case 'coPointsGroups':
+      return parsePointGroup(value) ?? value
+    default:
+      return value   // strings and enums — the kernel and the panel both read these as written
+  }
+}
+
+// Points are the other shape trap, and a quiet one: upstream writes a point as the STRING "XxY", while every
+//  consumer here indexes it as a [x, y] pair — so `printable_area[1][0]` on a raw import is the CHARACTER '2' of
+//  "256x0", and the bed comes out 2mm wide (measured on a real MakerWorld project: 2 x NaN).
+// Two separators exist in the wild: ConfigOptionPoint::serialize writes 'x', while some Orca options
+//  (best_object_pos) write "X,Y". A points GROUP is one string holding a comma-separated LIST of "XxY" points,
+//  so there the comma cannot also separate a point's own coordinates — hence two parsers rather than one regex.
+function parsePoint(text) {
+  const split = String(text).split('x')
+  let pair = split
+  if (split.length !== 2) pair = String(text).split(',')
+  if (pair.length !== 2) return null
+  const x = Number(pair[0]), y = Number(pair[1])
+  if (Number.isFinite(x) && Number.isFinite(y)) return [x, y]
+  return null
+}
+function parsePointGroup(text) {
+  const points = String(text).split(',').map(entry => {
+    const [a, b] = entry.split('x')
+    const x = Number(a), y = Number(b)
+    if (Number.isFinite(x) && Number.isFinite(y)) return [x, y]
+    return null
+  })
+  if (points.length && points.every(Boolean)) return points
+  return null
+}
+// Number('') is 0 and Number('  ') is 0, neither of which means "the option was set to zero" — an unparsable
+//  value is handed back untouched so the schema default keeps applying instead of a fabricated 0.
+function asNumber(value) {
+  if (value.trim() === '') return value
+  return finiteOr(Number(value), value)
+}
+// The number when it is finite, otherwise the fallback. The fallback is evaluated by the caller, so it is only
+//  used for values that are already at hand.
+function finiteOr(number, fallback) {
+  if (Number.isFinite(number)) return number
+  return fallback
+}
+
+/**
+ * A 3mf project's raw `project_settings.config` object -> a settings map this package's own API accepts.
+ * Keys the config schema does not define are dropped. Returns `{settings, applied, skipped}`.
+ */
+export function normalizeProjectSettings(raw) {
+  const settings = {}
+  let applied = 0
+  const skipped = []
+  for (const [key, value] of Object.entries(raw || {})) {
+    const type = schema[key]?.type
+    if (!type) { skipped.push(key); continue }
+    if (Array.isArray(value)) settings[key] = value.map(entry => coerceScalar(type, entry))
+    else settings[key] = coerceScalar(type, value)
+    applied++
+  }
+  return { settings, applied, skipped }
+}
+
+// The exact inverse, for WRITING a project_settings.config: every value back to the string shape upstream
+//  serializes (bool -> "1"/"0", point -> "XxY", a points group -> "X1xY1,X2xY2"), because that is what every other
+//  slicer's reader — and normalizeProjectSettings above — expects to coerce FROM. Writing the JS types raw would
+//  hand OrcaSlicer a bool it reads with its own string parser and this package a round-trip that only works here.
+//  Keys the schema does not define are dropped for the same reason normalize drops them: they could not be typed.
+const pointToText = (point) => {
+  if (Array.isArray(point)) return `${point[0]}x${point[1]}`
+  return String(point)
+}
+
+function serializeScalar(type, value) {
+  if (value == null) return ''
+  switch (type) {
+    case 'coBool': case 'coBools':
+      if (value) return '1'
+      return '0'
+    case 'coPoint': case 'coPoints':
+      return pointToText(value)
+    case 'coPointsGroups':
+      if (Array.isArray(value)) return value.map(pointToText).join(',')
+      return String(value)
+    default:
+      return String(value)   // numbers, percents, strings, enums — String() is upstream's own spelling for all of them
+  }
+}
+
+/** A settings map (real JS types) -> the all-strings object a 3mf's `project_settings.config` stores. */
+export function serializeProjectSettings(settings) {
+  const out = {}
+  for (const [key, value] of Object.entries(settings || {})) {
+    const type = schema[key]?.type
+    if (!type) continue
+    // A coPoint's value IS an array ([x, y]) — the generic array path would serialize its two numbers separately.
+    if (type !== 'coPoint' && Array.isArray(value)) out[key] = value.map(entry => serializeScalar(type, entry))
+    else out[key] = serializeScalar(type, value)
+  }
+  return out
+}
+
+
+// Issue 63: the custom G-code the kernel expands with upstream's PlaceholderParser (custom_gcode.cpp). The kernel
+//  gets the flattened settings it expands them against only when one of these holds text, which keeps every caller
+//  without a template on the raw path, byte-identical to before. The settings go in the form a 3mf's
+//  project_settings.config stores (serializeProjectSettings), as one JSON string: the kernel's flat key search
+//  never looks inside a string value, so no key in it can be taken for a kernel parameter the map omits.
+//  The kernel names the same templates in custom_gcode.cpp; test_custom_gcode.mjs checks each key here is expanded there.
+export const CUSTOM_GCODE_KEYS = ['machine_start_gcode', 'machine_end_gcode', 'filament_end_gcode', 'filament_start_gcode',
+  'before_layer_change_gcode', 'layer_change_gcode', 'time_lapse_gcode', 'file_start_gcode', 'change_filament_gcode']
+
+// Whether the map carries a printer's custom G-code — the switch between the kernel's own raw path and upstream's
+//  full semantics, in which every option exists with its schema default (custom_gcode_bridge reads them that way).
+function hasCustomGcode(settings) {
+  const hasText = key => [settings?.[key]].flat().some(value => String(value ?? '').trim() !== '')
+  return CUSTOM_GCODE_KEYS.some(hasText)
+}
+
+// What a printer profile asks of a tool change that the template path does not do yet. The slice is not refused —
+//  that would stop every multi-material print — but each key whose value would change the output is named
+//  (PROFILE_PARTIAL_SUPPORT), so the setting is not ignored silently. A key the map omits reads as upstream's schema
+//  default, as the template path does (custom_gcode_bridge).
+// ponytail: tool changes only, the gaps listed in custom_gcode.h. Overhang speeds (no ExtrusionQualityEstimator) are
+//  on in every profile, so a notice for them would show on every slice; add them when the notice has a better home.
+export const PARTIAL_SUPPORT_CODE = 'PROFILE_PARTIAL_SUPPORT'
+const TOOL_CHANGE_GAPS = [
+  { key: 'retract_length_toolchange', isSet: values => values.some(value => parseFloat(value) > 0),
+    effect: 'the retraction before a tool change uses retraction_length' },
+  { key: 'ooze_prevention', isSet: values => values.some(value => value === true || value === 1 || value === '1' || value === 'true'),
+    effect: 'idle tools are not parked at a standby temperature' },
+]
+export function partialSupport(settings, { toolCount = 1 } = {}) {
+  if (!hasCustomGcode(settings) || toolCount < 2) return []
+  const gaps = []
+  for (const gap of TOOL_CHANGE_GAPS) {
+    let value = settings?.[gap.key]
+    if (value == null || value === '') value = schemaDefault(gap.key)
+    if (gap.isSet([value].flat())) gaps.push({ code: PARTIAL_SUPPORT_CODE, key: gap.key, effect: gap.effect })
+  }
+  return gaps
+}
+
+function placeholderConfig(settings, plate, objectNames) {
+  if (!hasCustomGcode(settings)) return {}
+  // upstream's Print::get_plate_number_formatted: the 1-based plate, zero-padded to two digits
+  const plateNumber = String(plate + 1).padStart(2, '0')
+  // $object_names: the printable objects in merge order, from which the kernel derives upstream's object
+  //  placeholders (input_filename_base, first_object_name, num_objects — PrintBase::update_object_placeholders).
+  const objects = {}
+  if (objectNames?.length) objects.$object_names = objectNames.map(name => String(name ?? ''))
+  // The plate type the kernel's own temperatures follow (deriveKernelParams), so the template's bed temperature and
+  //  the second layer's agree about what the bed was heated to.
+  const bedType = { curr_bed_type: settings?.curr_bed_type ?? DEFAULT_BED_TYPE }
+  return { placeholder_config: JSON.stringify({ ...serializeProjectSettings({ ...settings, ...bedType }), $plate_number: plateNumber, ...objects }) }
+}
+
+// The bed temperature option of each plate type, upstream's get_bed_temp_key (PrintConfig.hpp:573). The first-layer
+//  option is the same key with `_initial_layer` (get_bed_temp_1st_layer_key).
+// The plate type a printer gets when it names none: upstream's Plater writes Preset::get_default_bed_type to
+//  curr_bed_type on every printer change, and that falls back to btPEI (Preset.cpp:993). The schema's own default
+//  ("Cool Plate") is never what a sliced printer runs with. hot_plate_temp is also the option this kernel always read.
+export const DEFAULT_BED_TYPE = 'High Temp Plate'
+const BED_TEMP_KEYS = {
+  'Supertack Plate': 'supertack_plate_temp', 'Cool Plate': 'cool_plate_temp', 'Textured Cool Plate': 'textured_cool_plate_temp',
+  'Engineering Plate': 'eng_plate_temp', 'High Temp Plate': 'hot_plate_temp', 'Textured PEI Plate': 'textured_plate_temp',
+}
+
+// A per-extruder column's first entry; a scalar is its own first entry.
+function firstEntryOf(value) {
+  if (Array.isArray(value)) return value[0]
+  return value
+}
+// A per-extruder column as a list; a scalar becomes a one-entry list.
+function asList(value) {
+  if (Array.isArray(value)) return value
+  return [value]
+}
+// The value when it is one of the accepted ones, otherwise the fallback.
+function allowedOr(value, accepted, fallback) {
+  if (accepted.includes(value)) return value
+  return fallback
+}
+
+// Right-panel settings values -> kernel parameters (derived from schema keys)
+//  opts.plate: which plate's entry to take from per-plate array options (wipe_tower_x/y — upstream coFloats,
+//  one entry per plate). Defaults to 0, so every existing caller reads exactly what it always did.
+//  opts.objectNames: the merged objects' names, for the custom G-code's object placeholders (see placeholderConfig).
+export function deriveKernelParams(settings, opts) {
+  const plate = opts?.plate ?? 0
+  // With a printer's custom G-code the kernel expands it against every option at its default (custom_gcode_bridge),
+  //  so the machine options it reads itself take their defaults too — otherwise the two halves of one G-code would
+  //  disagree. Without one, the omission rule: only keys the map holds are sent.
+  const followsTemplate = hasCustomGcode(settings)
+  const presentOrTemplate = (key) => followsTemplate || (settings != null && key in settings && settings[key] != null && settings[key] !== '')
+  const S = k => settingScalar(settings, k)
+  const str = k => String(S(k) ?? FFF_FALLBACKS[k])
+  const num = (k, d = FFF_FALLBACKS[k]) => finiteOr(Number(S(k)), d)
+  const bool = (k, d = FFF_FALLBACKS[k]) => {
+    const v = settingRaw(settings, k)
+    if (typeof v === 'boolean') return v
+    if (Array.isArray(v)) return !!v[0]
+    if (v == null) return d
+    return !!v
+  }
+  // Filament retraction overrides: upstream lets a material override the machine's retraction (TPU wants a
+  //  different pull-back than PLA on the same printer). These schema keys are nullable and carry no default of
+  //  their own — "unset" means keep the machine value — so this reads the settings map directly rather than
+  //  through settingScalar, whose schema fallback would not distinguish the two.
+  const override = (filamentKey, machineKey, fallback = FFF_FALLBACKS[machineKey]) => {
+    const raw = settings?.[filamentKey]
+    const value = Number(firstEntryOf(raw))
+    if (Number.isFinite(value)) return value
+    return num(machineKey, fallback)
+  }
+
+  let line_width = num('line_width'); if (!line_width) line_width = AUTO_LINE_WIDTH   // 0 = auto
+
+  let pat = str('sparse_infill_pattern')
+  if (!KERNEL_PATTERNS.includes(pat)) pat = 'rectilinear'                     // pattern unsupported by the kernel -> rectilinear
+
+  let seam = str('seam_position')
+  if (seam === 'aligned_back') seam = 'back'
+  if (!KERNEL_SEAMS.includes(seam)) seam = 'back'
+
+  // Support style: schema enum (default/grid/snug/organic/tree_slim/tree_strong/tree_hybrid)
+  //  -> kernel grid|tree|tree_lite. Since stage 18 the tree/organic family maps to the real organic TreeSupport ('tree',
+  //  generate_tree_support_3D -> real type5 branch toolpaths); everything else maps to grid.
+  //  support_type participates too, as upstream's UI does: a tree(auto)/tree(manual) TYPE whose style is
+  //  still 'default' is a tree request — before this, an imported Orca project saved with tree(auto) and
+  //  the default style silently sliced grid. An explicit non-tree style keeps winning over the type.
+  const styleRaw = str('support_style')
+  const typeRaw = str('support_type')
+  let support_style = 'grid'
+  if (/tree|organic/i.test(styleRaw) || (/tree/i.test(typeRaw) && styleRaw === 'default')) support_style = 'tree'
+  // Which tree. Upstream's slim / strong / hybrid run TreeSupport and organic runs TreeSupport3D
+  //  (SupportParameters.hpp:190-204), and a tree type left on 'default' resolves to organic there. The kernel defaults to
+  //  organic too, so only the three others are sent: an organic slice keeps exactly the parameters it had. Before this the
+  //  style never reached the kernel and every tree style sliced organic.
+  const tree_style = { tree_slim: 'slim', tree_strong: 'strong', tree_hybrid: 'hybrid' }[styleRaw]
+
+  // Bed: bounding box of the first rectangle in printable_area. Its lower-left corner is sent only when it is not
+  //  (0,0) — a delta bed centred on the origin, or an offset cartesian one — so every bed that starts at the corner
+  //  keeps exactly the parameters it had (see bedCenter below for what the kernel does with it).
+  const pa = settingRaw(settings, 'printable_area')
+  let bed_width = BED_FALLBACK.width, bed_depth = BED_FALLBACK.depth
+  const bedOriginParams = {}   // read back through bedOrigin/bedCenter (bed_frame.js)
+  if (Array.isArray(pa) && pa.length) {
+    const xs = pa.map(p => p[0]), ys = pa.map(p => p[1])
+    bed_width = Math.max(...xs) - Math.min(...xs); bed_depth = Math.max(...ys) - Math.min(...ys)
+    if (Math.min(...xs) !== 0) bedOriginParams.bed_origin_x = Math.min(...xs)
+    if (Math.min(...ys) !== 0) bedOriginParams.bed_origin_y = Math.min(...ys)
+  }
+
+  // Stage 21: per-feature widths — passed to the kernel verbatim (including strings like "120%"). Unedited keys are omitted -> the kernel derives auto(=line_width).
+  //  The 0=auto semantics are handled by the kernel's resolve_line_width (upstream Flow formula). Defaults unchanged (no feature set -> line_width).
+  const widths = {}
+  for (const k of ['outer_wall_line_width','inner_wall_line_width','top_surface_line_width',
+                   'sparse_infill_line_width','internal_solid_infill_line_width','initial_layer_line_width']) {
+    const v = S(k); if (v != null && v !== '') widths[k] = v
+  }
+  const machine = {}
+  for (const [param, [key, fallback]] of Object.entries(MACHINE_LIMITS)) machine[param] = num(key, fallback)
+
+  // Support filament mapping: which extruder prints the support base/raft, and which prints the support interface.
+  //  Upstream's "Default" is the value 0 = keep whatever tool is current, and an absent key means the same thing to
+  //  the kernel (its JSON reader falls back to its own 0 default). Unmapped supports are therefore omitted rather
+  //  than sent as 0, so a settings map that maps neither produces byte-for-byte the parameters it produced before
+  //  these keys existed — same reason the per-feature widths above are omitted when unedited.
+  const supportTools = {}
+  for (const key of ['support_filament', 'support_interface_filament']) {
+    const extruderIndex = num(key, 0)
+    if (extruderIndex > 0) supportTools[key] = extruderIndex
+  }
+
+  // Multi-material: upstream stores every filament option as one entry per extruder (coFloats), and the material
+  //  picker writes each extruder's material at its own index. Only a second entry makes these arrays appear, so a
+  //  single-material slice sends exactly the keys it always did — the kernel then reads its scalars as before.
+  //  A hole (a material that overrides nothing) is filled with the value tool 0 resolved to, because the kernel
+  //  reads the array positionally and cannot tell "absent" from "0".
+  // Prime tower keys, omitted when unset so the kernel/viewer defaults stay in charge (same rule as supportTools).
+  //  wipe_tower_x/y are coFloats upstream — one entry per plate — indexed by opts.plate. A hole (null entry) means
+  //  nobody chose a position for THAT plate, so the automatic placement stands there; a scalar applies to every
+  //  plate (the pre-array form, kept readable so old saved settings keep meaning what they meant).
+  const towerSettings = {}
+  {
+    const width = num('prime_tower_width')
+    if (width > 0) towerSettings.prime_tower_width = width
+    // Read the map itself, NOT settingRaw: wipe_tower_x/y carry an upstream schema default of (15, 220), which is
+    //  a coordinate off the front of a 200mm bed. Taking it as "the user chose a position" put the tower outside
+    //  the plate and disabled the automatic placement entirely — measured as a tower at z=-127.5 on a 200mm bed.
+    //  Absent from the map means nobody chose one, and the placement beside the model stands.
+    const chosen = (key) => { const raw = settings?.[key]
+      let v = raw
+      if (Array.isArray(raw)) v = raw[plate]
+      const n = Number(v)
+      if (v != null && v !== '' && Number.isFinite(n)) return n
+      return null }
+    const towerX = chosen('wipe_tower_x'), towerY = chosen('wipe_tower_y')
+    if (towerX != null) towerSettings.prime_tower_x = towerX
+    if (towerY != null) towerSettings.prime_tower_y = towerY
+    // The purging volumes table (flat N×N, mm³) and its scalars. Sent verbatim — the kernel indexes it [from*N+to].
+    const matrix = settingRaw(settings, 'flush_volumes_matrix')
+    if (Array.isArray(matrix) && matrix.length >= 4) towerSettings.flush_volumes_matrix = matrix.map(Number)
+    // Upstream defaults enable_prime_tower to false and relies on flushing into the model; the kernel defaults it
+    //  to true because that was the only destination it had. Both are sent only when the map carries them, so an
+    //  untouched project keeps whatever the kernel decides.
+    if ('enable_prime_tower' in (settings ?? {})) towerSettings.enable_prime_tower = !!settings.enable_prime_tower
+    if ('flush_into_infill' in (settings ?? {})) towerSettings.flush_into_infill = !!settings.flush_into_infill
+    const multiplier = num('flush_multiplier')
+    if (multiplier > 0) towerSettings.flush_multiplier = multiplier
+    const prime = num('prime_volume')
+    if (prime > 0) towerSettings.prime_volume = prime
+  }
+
+  // Pass-through parameters (see PASSTHROUGH_* above). `present` reads the settings MAP, not settingRaw, because
+  //  settingRaw's schema fallback is exactly what must not happen here — an unedited key has to stay absent.
+  const passthrough = {}
+  {
+    const present = (key) => settings != null && key in settings && settings[key] != null && settings[key] !== ''
+    for (const key of PASSTHROUGH_NUM) {
+      if (!present(key)) continue
+      const value = Number(S(key))
+      if (Number.isFinite(value)) passthrough[key] = value
+    }
+    for (const key of PASSTHROUGH_BOOL) if (present(key)) passthrough[key] = bool(key, false)
+    for (const key of PASSTHROUGH_PERCENT) {
+      if (!present(key)) continue
+      const value = Number(String(S(key)).replace('%', ''))
+      if (Number.isFinite(value)) passthrough[key] = value
+    }
+    for (const key of PASSTHROUGH_STR) if (present(key)) passthrough[key] = String(S(key))
+    for (const key of PASSTHROUGH_NUM_VECTOR) {
+      if (!present(key)) continue
+      const raw = settings[key]
+      passthrough[key] = asList(raw).map(entry => finiteOr(Number(entry), 0))
+    }
+    for (const key of PASSTHROUGH_STR_VECTOR) {
+      if (!present(key)) continue
+      const raw = settings[key]
+      passthrough[key] = asList(raw).map(entry => String(entry ?? ''))
+    }
+    // support_line_width is coFloatOrPercent, but the kernel reads it with the plain number reader rather than the
+    //  percent-aware json_width_raw the per-feature widths get. A "120%" would reach strtod as a quoted string and
+    //  parse to 0 == auto — the setting silently ignored. Resolved here against the nozzle, which is the same
+    //  thing json_width_raw does for the widths that do get the percent-aware reader.
+    if (present('support_line_width')) {
+      const text = String(settingScalar(settings, 'support_line_width')).trim()
+      let width
+      if (text.endsWith('%')) width = (parseFloat(text) / 100) * num('nozzle_diameter')
+      else width = Number(text)
+      if (Number.isFinite(width) && width > 0) passthrough.support_line_width = width
+    }
+  }
+
+  const motion = {}
+  for (const [key, ratioOver] of MOTION_KEYS) {
+    if (!presentOrTemplate(key)) continue
+    const raw = settingScalar(settings, key)
+    let value = Number(raw)
+    // A percent of another option (ratio_over) resolves against it; a plain coPercent (accel_to_decel_factor "50%")
+    //  is the number itself.
+    if (typeof raw === 'string' && raw.trim().endsWith('%')) {
+      value = parseFloat(raw)
+      if (ratioOver) value = value / 100 * num(ratioOver, 0)
+    }
+    if (Number.isFinite(value)) motion[key] = value
+  }
+  for (const key of MOTION_BOOLS) if (presentOrTemplate(key)) motion[key] = bool(key, false)
+
+  // emit_machine_limits_to_gcode: the machine's limits written into the G-code (upstream print_machine_envelope),
+  //  as the 16 numbers machine_writer.h reads in this order. Sent only when the profile turns it on.
+  const envelope = {}
+  if (presentOrTemplate('emit_machine_limits_to_gcode') && bool('emit_machine_limits_to_gcode', false)) {
+    envelope.machine_envelope = ['machine_max_acceleration_x', 'machine_max_acceleration_y', 'machine_max_acceleration_z',
+      'machine_max_acceleration_e', 'machine_max_speed_x', 'machine_max_speed_y', 'machine_max_speed_z', 'machine_max_speed_e',
+      'machine_max_acceleration_extruding', 'machine_max_acceleration_retracting', 'machine_max_acceleration_travel',
+      'machine_max_jerk_x', 'machine_max_jerk_y', 'machine_max_jerk_z', 'machine_max_jerk_e', 'machine_max_junction_deviation',
+    ].map(key => num(key, 0))
+  }
+
+  // Sent only for the three non-organic styles (see tree_style above), so an empty map still derives the same keys.
+  const treeStyle = {}
+  if (tree_style) treeStyle.tree_style = tree_style
+
+  // Temperatures. The bed's option follows the plate type upstream does (get_bed_temp_key). The first layer's own
+  //  temperatures (nozzle_temperature_initial_layer, <plate>_temp_initial_layer) start the print and the kernel
+  //  switches at the second layer, as upstream's process_layer does (GCode.cpp:5631). With a printer's custom
+  //  G-code the start block's temperatures come from custom_gcode_bridge, which reads every option with its default,
+  //  so the kernel takes the first-layer ones the same way or the two would disagree about what the print started
+  //  at. Without one, only keys the map holds are sent. A map without curr_bed_type is on DEFAULT_BED_TYPE.
+  const bedTempKey = BED_TEMP_KEYS[settings?.curr_bed_type ?? DEFAULT_BED_TYPE] ?? 'hot_plate_temp'
+  const printerCommands = { bed_temp: num(bedTempKey, FFF_FALLBACKS.hot_plate_temp) }
+  if (presentOrTemplate('nozzle_temperature_initial_layer')) printerCommands.first_layer_nozzle_temp = num('nozzle_temperature_initial_layer')
+  if (presentOrTemplate(`${bedTempKey}_initial_layer`)) printerCommands.first_layer_bed_temp = num(`${bedTempKey}_initial_layer`, FFF_FALLBACKS.hot_plate_temp)
+  // Whether one nozzle carries every filament (upstream single_extruder_multi_material): the second-layer switch
+  //  then names no tool and sets only the loaded one.
+  if (presentOrTemplate('single_extruder_multi_material')) printerCommands.single_extruder_multi_material = bool('single_extruder_multi_material', true)
+  // No retraction for a travel inside the infill (upstream GCode::needs_retraction); upstream's default is on.
+  if (presentOrTemplate('reduce_infill_retraction')) printerCommands.reduce_infill_retraction = bool('reduce_infill_retraction', true)
+  // The firmware flavor formats the machine commands (machine_writer.h); upstream's default is "marlin".
+  if (presentOrTemplate('gcode_flavor')) printerCommands.gcode_flavor = str('gcode_flavor')
+  // disable_m73 false: the G-code carries upstream's M73 progress placeholders (finalizeGcode fills them).
+  if (presentOrTemplate('disable_m73')) printerCommands.disable_m73 = bool('disable_m73', false)
+
+  const perExtruder = {}
+  for (const [param, key, scalar] of [
+    ['extruder_nozzle_temp', 'nozzle_temperature', num('nozzle_temperature')],
+    ['extruder_first_layer_temp', 'nozzle_temperature_initial_layer', num('nozzle_temperature_initial_layer')],
+    ['extruder_filament_diameter', 'filament_diameter', num('filament_diameter')],
+    ['extruder_flow_ratio', 'filament_flow_ratio', num('filament_flow_ratio')],
+    ['extruder_retract_length', 'filament_retraction_length', override('filament_retraction_length', 'retraction_length')],
+    ['extruder_retract_speed', 'filament_retraction_speed', override('filament_retraction_speed', 'retraction_speed')],
+    ['extruder_z_hop', 'filament_z_hop', override('filament_z_hop', 'z_hop')],
+  ]) {
+    const raw = settings?.[key]
+    if (!Array.isArray(raw) || raw.length < 2) continue
+    perExtruder[param] = raw.map(v => {
+      if (v == null || v === '') return scalar        // null survives a JSON round-trip; Number(null) would be 0
+      return finiteOr(Number(firstEntryOf(v)), scalar)
+    })
+  }
+
+  return {
+    ...widths,
+    ...machine,
+    ...passthrough,     // present only for keys the settings map actually holds (see PASSTHROUGH_* above)
+    ...treeStyle,
+    ...envelope,
+    ...motion,
+    layer_height: num('layer_height'),
+    first_layer_height: num('initial_layer_print_height'),
+    line_width,
+    wall_loops: num('wall_loops'),
+    infill_density: num('sparse_infill_density') / 100,      // % → 0~1
+    sparse_infill_pattern: pat,
+    infill_angle: num('infill_direction'),
+    top_shell_layers: num('top_shell_layers'),
+    bottom_shell_layers: num('bottom_shell_layers'),
+    seam_position: seam,
+    skirt_loops: num('skirt_loops'),
+    skirt_distance: num('skirt_distance'),
+    skirt_height: num('skirt_height'),                       // stage 33: the kernel used to hardcode the first layer
+    brim_width: num('brim_width'),
+    brim_object_gap: num('brim_object_gap'),                 // stage 33: the kernel used to hardcode w*0.5
+    ...perExtruder,
+    // Prime tower. These were the one part of multi-material the settings map could not reach: the kernel read its
+    //  own prime_tower_* parameters and nothing mapped the upstream keys onto them, so the tower's size and place
+    //  were whatever the viewer decided. Only sent when the user actually set them — an unset width keeps the
+    //  kernel's own default, and an unset position lets the viewer's auto-placement stand.
+    ...towerSettings,
+    retract_length: override('filament_retraction_length', 'retraction_length'),   // vector[0]
+    retraction_minimum_travel: override('filament_retraction_minimum_travel', 'retraction_minimum_travel'),  // stage 33: used to be the kernel constant 2.0
+    gcode_resolution: num('resolution'),                  // stage 33: tree-support path simplification tolerance
+    retract_speed: override('filament_retraction_speed', 'retraction_speed'),
+    z_hop: override('filament_z_hop', 'z_hop'),
+    travel_speed: num('travel_speed'),
+    first_layer_speed: num('initial_layer_speed'),
+    print_speed: num('outer_wall_speed'),
+    nozzle_diameter: num('nozzle_diameter'),
+    filament_diameter: num('filament_diameter'),
+    flow_ratio: num('filament_flow_ratio'),
+    nozzle_temp: num('nozzle_temperature'),
+    ...printerCommands,                                       // temperatures (bed by plate type, the first layer's own) and the flavor
+    bed_width, bed_depth,
+    ...bedOriginParams,
+    bed_height: num('printable_height'),                    // 0 = profile states no ceiling -> kernel skips the check
+    // Explicitly-set only: the schema default here is upstream's generic "G28 / G1 Z5" preamble, and falling back
+    //  to it would rewrite the emitted G-code for every caller. The kernel keeps its own preamble when these are empty.
+    machine_start_gcode: String(settings?.machine_start_gcode ?? ''),
+    machine_end_gcode: String(settings?.machine_end_gcode ?? ''),
+    ...placeholderConfig(settings, plate, opts?.objectNames),
+    enable_support: bool('enable_support'),
+    support_threshold_angle: num('support_threshold_angle'),
+    support_top_z_distance: num('support_top_z_distance'),
+    support_bottom_z_distance: num('support_bottom_z_distance'),   // stage 32: support bottom z-gap (default 0.2 = equivalent to current behavior)
+    support_xy_distance: num('support_object_xy_distance'),
+    support_interface_top_layers: num('support_interface_top_layers'),
+    // Stage 33: support keys added when the kernel hardcoding was removed (upstream schema key names kept)
+    support_angle: num('support_angle'),
+    support_base_pattern: str('support_base_pattern'),
+    support_interface_pattern: str('support_interface_pattern'),
+    support_interface_spacing: num('support_interface_spacing'),
+    support_base_pattern_spacing: num('support_base_pattern_spacing'),
+    support_remove_small_overhang: bool('support_remove_small_overhang'),
+    bridge_no_support: bool('bridge_no_support'),
+    support_expansion: num('support_expansion'),
+    support_threshold_overlap: (() => { const v = settingRaw(settings, 'support_threshold_overlap')
+      if (typeof v === 'string' && v.trim().endsWith('%')) return parseFloat(v) / 100
+      return finiteOr(Number(v), 0.5) })(),   // "50%" -> 0.5 (ratio of extrusion width)
+    support_on_build_plate_only: bool('support_on_build_plate_only'),
+    support_interface_bottom_layers: num('support_interface_bottom_layers'),
+    ...supportTools,                                            // present only when a support extruder is mapped (see above)
+    raft_layers: num('raft_layers'),
+    raft_expansion: num('raft_expansion'),                 // stage 33: the kernel used to hardcode +3.0
+    raft_contact_distance: num('raft_contact_distance'),   // stage 33: previously ignored by the kernel
+    fan_speed: num('fan_max_speed'),                       // no fan_speed key -> fan_max_speed
+    close_fan_the_first_x_layers: num('close_fan_the_first_x_layers'),
+    full_fan_speed_layer: num('full_fan_speed_layer'),
+    slow_down_layer_time: num('slow_down_layer_time'),
+    enable_arc_fitting: bool('enable_arc_fitting'),
+    spiral_mode: bool('spiral_mode'),
+    // New in stage 5 (derived from the matching schema keys)
+    seam_slope_type: str('seam_slope_type'),      // none|external|all -> scarf seam
+    enable_pressure_advance: bool('enable_pressure_advance'),
+    pressure_advance: num('pressure_advance'),
+    support_style,                                                 // grid|tree_lite (mapped above)
+    bridge_speed: num('bridge_speed'),
+    // New in stage 6 (derived from the matching schema keys). The MM parameters (extruder_count/mm_group_split) are
+    //  injected at onSlice time from the viewer's per-object extruder assignment (not included here).
+    ironing_type: str('ironing_type'),       // no ironing|top|topmost|solid (the top family = on)
+    ironing_spacing: num('ironing_spacing'),
+    ironing_flow: num('ironing_flow'),
+    ironing_speed: num('ironing_speed'),
+    reduce_crossing_wall: bool('reduce_crossing_wall'),
+    max_volumetric_extrusion_rate_slope: num('max_volumetric_extrusion_rate_slope'),
+    // Stage 7: wall generator classic|arachne (arachne = the real ported OrcaSlicer WallToolPaths, variable width)
+    wall_generator: allowedOr(str('wall_generator'), ['arachne'], 'classic'),
+    // support_density has no matching schema key, so the kernel default (0.15) is used; scarf_length likewise uses the kernel default (10mm)
+  }
+}
+
+// ---- Printer technology (FFF vs SLA routing) ----------------------------------------------------------------
+// The technology is a property of the printer profile, exactly as upstream models it: one settings map, two
+//  disjoint key families, and the profile's technology key decides which family the UI shows and which slicing
+//  path runs. The schema already carries the key (inherited from the upstream lineage), so an imported preset
+//  that names a resin printer routes itself.
+export function printerTechnology(settings) {
+  if (String(settingRaw(settings, 'printer_technology') ?? 'FFF').toUpperCase() === 'SLA') return 'SLA'
+  return 'FFF'
+}
+
+// SLA settings provenance table. Rows come from the schema's `defined_in` marker so a new resin option cannot
+// silently leave the UI/bridge without a documented omission/default decision. Explicit rows cover upstream
+// expression defaults the extractor cannot evaluate (support_tree_type and branching's bridge limits).
+const SLA_SETTING_OVERRIDES = {
+  layer_height: { omission: 'resin-default', default: 0.05, provenance: 'shared key; FFF schema default is not used' },
+  support_tree_type: { default: 'default', enum: ['default', 'branching', 'organic'], provenance: 'upstream enum expression' },
+  branchingsupport_pillar_connection_mode: { default: 'dynamic', enum: ['zigzag', 'cross', 'dynamic'], provenance: 'upstream enum expression' },
+  sla_archive_format: { default: 'SL1', enum: ['SL1'], provenance: 'Original Prusa SL1 archive' },
+}
+
+const SLA_SCHEMA_ROWS = Object.fromEntries(Object.entries(schema)
+  .filter(([key, meta]) => key === 'printer_technology' || String(meta.defined_in ?? '').includes('sla_'))
+  .map(([key, meta]) => {
+    const row = { source: 'config-schema.json', omission: 'schema-default', default: meta.default }
+    if (meta.enum_values) row.enum = [...meta.enum_values]
+    row.provenance = `${meta.defined_in}:${meta.line}`
+    return [key, row]
+  }))
+
+export const SLA_SETTING_CONTRACT = Object.freeze(Object.fromEntries(
+  Object.entries({ ...SLA_SCHEMA_ROWS, ...SLA_SETTING_OVERRIDES }).map(([key, row]) => [key, Object.freeze({
+    ...row,
+    ...(SLA_SETTING_OVERRIDES[key] ?? {}),
+  })]),
+))
+export const slaSettingContract = SLA_SETTING_CONTRACT
+export const slaSettingKeys = Object.freeze(Object.keys(SLA_SETTING_CONTRACT))
+
+// Right-panel settings values -> SLA slice parameters (sla_core.js) + the raster/export geometry the viewer's
+//  SL1 writer needs. A separate function, NOT a branch inside deriveKernelParams: that one feeds the WASM kernel
+//  and its empty-map key count is a pinned invariant — this one feeds the JS contour slicer and owes bytes to
+//  nobody yet. Keys the schema does not define (the resin display's pixel grid, the per-layer height override)
+//  are read from the map directly, so they follow the same omission-friendly rule: absent means the default.
+// The number when it is finite and above zero, otherwise the fallback.
+function positiveOr(number, fallback) {
+  if (Number.isFinite(number) && number > 0) return number
+  return fallback
+}
+// The number when it is finite and not negative (zero is legal), otherwise the fallback.
+function nonNegativeOr(number, fallback) {
+  if (Number.isFinite(number) && number >= 0) return number
+  return fallback
+}
+// A flag whose absence means on.
+function trueUnlessSet(value) {
+  if (value === undefined) return true
+  return !!value
+}
+export function deriveSlaParams(settings) {
+  const S = k => settingScalar(settings, k)
+  const num = (k, d = SLA_FALLBACKS[k]) => positiveOr(Number(S(k)), d)
+
+  // Read from the MAP, not through the schema fallback: the key is shared with FFF and its schema default is that
+  //  technology's opinion (0.2mm) — four resin layers thick. Absent means the resin default here.
+  const rawLayerHeight = settings?.layer_height
+  const mapLayerHeight = Number(firstEntryOf(rawLayerHeight))
+  const layer_height = positiveOr(mapLayerHeight, SLA_FALLBACKS.layer_height)
+  // Zero is a legal fade count (no fade band), so this one cannot go through the positives-only reader.
+  const fadedRaw = Number(S('faded_layers'))
+  const requestedSupportTree = String(S('support_tree_type') ?? 'default').toLowerCase()
+  const support_tree_type = allowedOr(requestedSupportTree, ['default', 'branching', 'organic'], 'default')
+  return {
+    layer_height,
+    initial_layer_height: num('initial_layer_height', layer_height),
+    exposure_time: num('exposure_time'),
+    initial_exposure_time: num('initial_exposure_time'),
+    faded_layers: nonNegativeOr(fadedRaw, 10),
+    // The physical display and its pixel grid — what turns millimetres into raster pixels at export time.
+    //  Fallbacks are the SL1's own panel, the reference machine of the format this exports to.
+    display_width: num('display_width'),
+    display_height: num('display_height'),
+    display_pixels_x: num('display_pixels_x'),
+    display_pixels_y: num('display_pixels_y'),
+    // Panel mounting: the whole SL1 family is portrait with X mirrored (projection through the vat floor);
+    //  the raster writer swaps the image axes for portrait exactly like upstream SL1.cpp create_raster.
+    display_orientation: allowedOr(String(S('display_orientation') ?? 'portrait'), ['landscape'], 'portrait'),
+    display_mirror_x: trueUnlessSet(settingRaw(settings, 'display_mirror_x')),
+    display_mirror_y: !!settingRaw(settings, 'display_mirror_y'),
+    // SL1 archive identity fields (config.ini): written as-is, empty when the host never set a named
+    //  profile — the same thing upstream produces then. material_print_speed defaults to 'fast', the value
+    //  every Prusa vendor SL1 material carries (-> expUserProfile 0 in the archive).
+    material_print_speed: String(S('material_print_speed') ?? 'fast'),
+    printer_model: String(S('printer_model') ?? ''),
+    printer_variant: String(S('printer_variant') ?? ''),
+    printer_settings_id: String(S('printer_settings_id') ?? ''),
+    sla_print_settings_id: String(S('sla_print_settings_id') ?? ''),
+    sla_material_settings_id: String(S('sla_material_settings_id') ?? ''),
+    // The kernel's over-bed check and centring read bed dimensions; for a resin printer the printable area IS
+    //  the display, so the display doubles as the bed the shared parser sees.
+    bed_width: num('display_width'),
+    bed_depth: num('display_height'),
+    // Support generation (kernel slice_sla): the grid-pillar generator's shape parameters, all schema keys the
+    //  SLA extraction pass brought in — schema defaults rule, an edit wins.
+    supports_enable: !!settingRaw(settings, 'supports_enable'),
+    pad_enable: !!settingRaw(settings, 'pad_enable'),
+    // Passed through so a requested hollow is REFUSED (typed kernel error) instead of silently sliced solid —
+    //  the OpenVDB chain hollowing needs is not ported, and a solid print labeled hollowed is the worst outcome.
+    hollowing_enable: !!settingRaw(settings, 'hollowing_enable'),
+    support_buildplate_only: !!settingRaw(settings, 'support_buildplate_only'),
+    support_pillar_diameter: num('support_pillar_diameter'),
+    support_head_front_diameter: num('support_head_front_diameter'),
+    support_head_width: num('support_head_width'),
+    support_head_penetration: num('support_head_penetration'),
+    support_points_density_relative: num('support_points_density_relative'),
+    support_critical_angle: num('support_critical_angle'),
+    support_tree_type,
+    // The tree shape (upstream SupportTreeConfig): bridge reach, bracing distance, the base foot cone, the
+    //  pillar connection style, and how far the object is lifted onto its supports. Elevation may legally be
+    //  ZERO (print directly on the plate), so it cannot go through the positives-only reader.
+    support_max_bridge_length: num('support_max_bridge_length'),
+    support_max_pillar_link_distance: num('support_max_pillar_link_distance'),
+    support_base_diameter: num('support_base_diameter'),
+    support_base_height: num('support_base_height'),
+    // The rest of upstream make_support_cfg (SLAPrint.cpp:50) — small-pillar percent arrives as "50%" so the
+    //  percent sign is stripped here; widening factor and base safety distance are legally ZERO (zero safety
+    //  falls back to the kernel's own safety_distance), so neither can go through the positives-only reader.
+    support_small_pillar_diameter_percent:
+      positiveOr(Number(String(S('support_small_pillar_diameter_percent') ?? '').replace('%', '')), 50),
+    support_pillar_widening_factor:
+      nonNegativeOr(Number(S('support_pillar_widening_factor')), 0),
+    support_base_safety_distance:
+      nonNegativeOr(Number(S('support_base_safety_distance')), 1),
+    support_max_bridges_on_pillar: num('support_max_bridges_on_pillar'),
+    support_max_weight_on_model: num('support_max_weight_on_model'),
+    // The generator's input slices are gap-closed with this radius, exactly like upstream slice_mesh_ex.
+    slice_closing_radius: num('slice_closing_radius'),
+    support_object_elevation: nonNegativeOr(Number(S('support_object_elevation')), 5),
+    support_pillar_connection_mode: String(S('support_pillar_connection_mode') ?? 'dynamic'),
+    // The pad (upstream make_pad_cfg): wall height is legally ZERO (flat pad, no cavity), so it cannot go
+    //  through the positives-only reader.
+    pad_brim_size: num('pad_brim_size'),
+    pad_wall_thickness: num('pad_wall_thickness'),
+    pad_wall_height:
+      nonNegativeOr(Number(S('pad_wall_height')), 0),
+    pad_wall_slope: num('pad_wall_slope'),
+    pad_max_merge_distance: num('pad_max_merge_distance'),
+    pad_around_object: !!settingRaw(settings, 'pad_around_object'),
+    // Embed mode (upstream PadConfig::EmbedObject): the ring's gap and the connector sticks that keep the
+    //  object attached to the pad. Read even when embed is off — the kernel ignores them then.
+    pad_around_object_everywhere: !!settingRaw(settings, 'pad_around_object_everywhere'),
+    pad_object_gap: num('pad_object_gap'),
+    pad_object_connector_width: num('pad_object_connector_width'),
+    pad_object_connector_stride: num('pad_object_connector_stride'),
+    pad_object_connector_penetration: num('pad_object_connector_penetration'),
+  }
+}
+
+// ---- Preset application -------------------------------------------------------------------------------------
+// The clear-then-merge every preset consumer needs and each demo used to rewrite: a preset carries only the
+// keys it sets, so merging one over another leaves the previous pick's leftovers underneath (an ABS chamber
+// temperature under a PLA pick). `keys` is the catalog's own key set (filaments.keys, processApi.keys,
+// printerKeys) — cleared first, so applying a material never disturbs a process pick and vice versa.
+// A null/undefined preset (a failed settingsFor lookup) applies NOTHING — the previous pick stays whole,
+// because half-clearing on a bad name would be worse than doing nothing.
+export function applyPreset(settings, preset, keys) {
+  if (!preset) return settings ?? {}
+  const next = { ...(settings ?? {}) }
+  for (const key of keys ?? []) delete next[key]
+  return Object.assign(next, preset)
+}
+
+// ---- Ignored-key reporting ----------------------------------------------------------------------------------
+// The FFF derivation consumes a curated key set (generated by probing — types/gen_kernel_params.mjs). Every
+// other key in a settings map is accepted and silently does nothing to a slice, which is exactly how a
+// support_type request once sliced grid with no warning. This is the inspection surface for that class:
+// which of MY map's keys does deriveKernelParams actually read?
+// Scope: the FFF kernel derivation ONLY. A key ignored here can still be real elsewhere — the SLA derivation
+// (slaSettingKeys), the viewer (enable_prime_tower, printable_area), or project metadata — so treat the
+// result as "has no effect on an FFF slice", not "useless".
+import { KERNEL_SETTING_KEYS } from './kernel_setting_keys.js'
+export const kernelSettingKeys = Object.freeze([...KERNEL_SETTING_KEYS])
+const KERNEL_SETTING_KEY_SET = new Set(KERNEL_SETTING_KEYS)
+export function ignoredKernelSettings(settings) {
+  return Object.keys(settings ?? {}).filter(key => !KERNEL_SETTING_KEY_SET.has(key)).sort()
+}
+
+// ---- Preset files (the .json OrcaSlicer imports/exports) ----------------------------------------------------
+// Re-exported here rather than given their own subpath: they are settings-map transforms like the 3mf project
+//  codecs above, and a consumer that has one hand on `settings` should not need a second import path for them.
+export { writePresetFile, readPresetFile, presetFileText, presetOptionKeys } from './preset_file.js'

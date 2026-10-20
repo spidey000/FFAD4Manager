@@ -716,10 +716,18 @@ export default function Viewport({
         onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) loadPresetFile(f) }}
         data-testid="preset-input" style={{ display: 'none' }} />
 
-      <ResponsiveInert visible={showPanel('topBar')} intermediate={intermediate} inspectorOpen={inspectorOpen}><TopBar layout={layout.variant} showTabs={ok} canvasMode={canvasMode} onCanvasMode={enterCanvasMode} prepareEnabled={!gcodeOnly} gcodeJob={gcode == null && importedGcode} onCloseGcode={closeImportedGcode} previewEnabled={layerCount > 0} onOpen={openFilePicker} onSaveProject={exportProject} onExportSTL={exportSTL} canSave={objects.length > 0} exporting={exporting} onUndo={() => travelHistory('undo')} onRedo={() => travelHistory('redo')} canUndo={historyDepth.undo > 0 && canvasMode === 'prepare'} canRedo={historyDepth.redo > 0 && canvasMode === 'prepare'} /></ResponsiveInert>
+      <ResponsiveInert visible={showPanel('topBar')} intermediate={intermediate} inspectorOpen={inspectorOpen}>
+        <TopBar layout={layout.variant} showTabs={ok} canvasMode={canvasMode} onCanvasMode={enterCanvasMode} prepareEnabled={!gcodeOnly}
+          gcodeJob={gcode == null && importedGcode} onCloseGcode={closeImportedGcode} previewEnabled={layerCount > 0} onOpen={openFilePicker}
+          onSaveProject={exportProject} onExportSTL={exportSTL} canSave={objects.length > 0} exporting={exporting}
+          onUndo={() => travelHistory('undo')} onRedo={() => travelHistory('redo')}
+          canUndo={historyDepth.undo > 0 && canvasMode === 'prepare'} canRedo={historyDepth.redo > 0 && canvasMode === 'prepare'} />
+      </ResponsiveInert>
 
       <div ref={appBodyRef} className="app-body">
-        <ResponsiveInert visible={ok && canvasMode === 'prepare' && showPanel('gizmoRail')} intermediate={intermediate} inspectorOpen={inspectorOpen}><GizmoRail gizmoMode={gmode} paintMode={paintMode} onGizmo={m => { setPaintMode('off'); apiRef.current?.setMode(m) }} onTogglePaint={togglePaintGizmo} paintEnabled={tech !== 'SLA'} /></ResponsiveInert>
+        <ResponsiveInert visible={ok && canvasMode === 'prepare' && showPanel('gizmoRail')} intermediate={intermediate} inspectorOpen={inspectorOpen}>
+          <GizmoRail gizmoMode={gmode} paintMode={paintMode} onGizmo={m => { setPaintMode('off'); apiRef.current?.setMode(m) }} onTogglePaint={togglePaintGizmo} paintEnabled={tech !== 'SLA'} />
+        </ResponsiveInert>
 
         {/* Center viewport */}
         <div className="viewport-col" {...(intermediate && inspectorOpen ? { inert: '' } : {})}>

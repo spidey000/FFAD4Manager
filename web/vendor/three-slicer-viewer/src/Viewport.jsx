@@ -718,7 +718,7 @@ export default function Viewport({
         data-testid="preset-input" style={{ display: 'none' }} />
 
       {showPanel('topBar') && <div className="responsive-inert-wrapper" {...(intermediate && inspectorOpen ? { inert: '' } : {})}>
-        <TopBar showTabs={ok} canvasMode={canvasMode} onCanvasMode={enterCanvasMode} prepareEnabled={!gcodeOnly} gcodeJob={gcode == null && importedGcode} onCloseGcode={closeImportedGcode}
+        <TopBar layout={layout.variant} showTabs={ok} canvasMode={canvasMode} onCanvasMode={enterCanvasMode} prepareEnabled={!gcodeOnly} gcodeJob={gcode == null && importedGcode} onCloseGcode={closeImportedGcode}
           previewEnabled={layerCount > 0} onOpen={openFilePicker} onSaveProject={exportProject} onExportSTL={exportSTL} canSave={objects.length > 0} exporting={exporting} onUndo={() => travelHistory('undo')} onRedo={() => travelHistory('redo')} canUndo={historyDepth.undo > 0 && canvasMode === 'prepare'} canRedo={historyDepth.redo > 0 && canvasMode === 'prepare'} />
       </div>}
 

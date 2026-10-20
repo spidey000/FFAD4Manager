@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { deriveResponsiveLayout } from '../src/hooks/use_responsive_layout.js'
+import { deriveResponsiveLayout, effectiveSheetSnap, sheetSnapHeights, snapSheetHeight } from '../src/hooks/use_responsive_layout.js'
 
 test('responsive layout uses container dimensions and scene fit', () => {
   assert.deepEqual(deriveResponsiveLayout(767, 800), { variant: 'compact', short: false })
@@ -9,4 +9,15 @@ test('responsive layout uses container dimensions and scene fit', () => {
   assert.deepEqual(deriveResponsiveLayout(959, 900), { variant: 'intermediate', short: false })
   assert.deepEqual(deriveResponsiveLayout(960, 800), { variant: 'expanded', short: false })
   assert.deepEqual(deriveResponsiveLayout(960, 800, 420), { variant: 'intermediate', short: false })
+})
+
+test('sheet release selects the nearest stop and only lets a fast fling bias one stop', () => {
+  const { collapsed, half, expanded } = sheetSnapHeights(600)
+  assert.equal(snapSheetHeight(collapsed + 4, 0, 600), 'collapsed')
+  assert.equal(snapSheetHeight((collapsed + half) / 2 + 2, 0, 600), 'half')
+  assert.equal(snapSheetHeight(half + 2, 0, 600), 'half')
+  assert.equal(snapSheetHeight(collapsed + 10, 0.61, 600), 'half')
+  assert.equal(snapSheetHeight(expanded - 8, -0.61, 600), 'half')
+  assert.equal(effectiveSheetSnap('expanded', true), 'collapsed')
+  assert.equal(effectiveSheetSnap('expanded', false), 'expanded')
 })

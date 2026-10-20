@@ -6,6 +6,28 @@ export function deriveResponsiveLayout(width, height, inspectorWidth = 320) {
   return { variant: 'intermediate', short: false }
 }
 
+export function sheetSnapHeights(availableHeight) {
+  const collapsed = Math.min(64, availableHeight)
+  const half = Math.max(collapsed, Math.min(availableHeight * 0.52, availableHeight - 328))
+  const expanded = Math.max(collapsed, availableHeight - 148)
+  return { collapsed, half, expanded }
+}
+
+export function snapSheetHeight(height, velocityY, availableHeight, velocityThreshold = 0.6) {
+  const snaps = sheetSnapHeights(availableHeight)
+  const stops = ['collapsed', 'half', 'expanded']
+  if (Math.abs(velocityY) >= velocityThreshold) {
+    const nearest = stops.reduce((best, stop) => Math.abs(snaps[stop] - height) < Math.abs(snaps[best] - height) ? stop : best, stops[0])
+    const index = stops.indexOf(nearest)
+    return stops[Math.max(0, Math.min(stops.length - 1, index + (velocityY > 0 ? 1 : -1)))]
+  }
+  return stops.reduce((best, stop) => Math.abs(snaps[stop] - height) < Math.abs(snaps[best] - height) ? stop : best, stops[0])
+}
+
+export function effectiveSheetSnap(preferred, short) {
+  return short ? 'collapsed' : preferred
+}
+
 export function useResponsiveLayout(ref, inspectorWidth = 320) {
   const [size, setSize] = useState({ width: 0, height: 0 })
   useEffect(() => {

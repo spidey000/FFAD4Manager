@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
-export function deriveResponsiveLayout(width, height, inspectorWidth = 320) {
-  if (width < 768) return { variant: 'compact', short: height < 520 }
+export function deriveResponsiveLayout(width, height, inspectorWidth = 320, compactBreakpoint = 768) {
+  if (width < compactBreakpoint) return { variant: 'compact', short: height < 520 }
   if (width >= 960 && width - 64 - inspectorWidth >= 480) return { variant: 'expanded', short: false }
   return { variant: 'intermediate', short: false }
 }
@@ -36,18 +36,20 @@ export function focusTrapTarget(index, count, backwards) {
 }
 
 export function useResponsiveLayout(ref, inspectorWidth = 320) {
-  const [size, setSize] = useState({ width: 0, height: 0 })
+  const [size, setSize] = useState({ width: 0, height: 0, compactBreakpoint: 768 })
   useEffect(() => {
     const node = ref.current
     if (!node || typeof ResizeObserver === 'undefined') return
     const measure = entry => {
       const box = entry?.contentRect ?? node.getBoundingClientRect()
-      setSize({ width: box.width, height: box.height })
+      const inheritedBreakpoint = node.ownerDocument.defaultView?.getComputedStyle(node).getPropertyValue('--vp-compact-breakpoint')
+      const parsedBreakpoint = Number.parseFloat(inheritedBreakpoint)
+      setSize({ width: box.width, height: box.height, compactBreakpoint: Number.isFinite(parsedBreakpoint) && parsedBreakpoint > 0 ? parsedBreakpoint : 768 })
     }
     measure()
     const observer = new ResizeObserver(entries => measure(entries[0]))
     observer.observe(node)
     return () => observer.disconnect()
   }, [ref])
-  return deriveResponsiveLayout(size.width, size.height, inspectorWidth)
+  return deriveResponsiveLayout(size.width, size.height, inspectorWidth, size.compactBreakpoint)
 }

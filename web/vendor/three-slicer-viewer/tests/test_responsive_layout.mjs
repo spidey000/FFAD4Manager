@@ -4,11 +4,15 @@ import { deriveResponsiveLayout, effectiveSheetSnap, focusTrapTarget, sheetSnapH
 
 test('responsive layout uses container dimensions and scene fit', () => {
   assert.deepEqual(deriveResponsiveLayout(767, 800), { variant: 'compact', short: false })
+  assert.deepEqual(deriveResponsiveLayout(768, 800), { variant: 'intermediate', short: false })
+  assert.deepEqual(deriveResponsiveLayout(749, 800, 320, 750), { variant: 'compact', short: false })
+  assert.deepEqual(deriveResponsiveLayout(750, 800, 320, 750), { variant: 'intermediate', short: false })
   assert.deepEqual(deriveResponsiveLayout(390, 490), { variant: 'compact', short: true })
-  assert.deepEqual(deriveResponsiveLayout(768, 900), { variant: 'intermediate', short: false })
   assert.deepEqual(deriveResponsiveLayout(959, 900), { variant: 'intermediate', short: false })
   assert.deepEqual(deriveResponsiveLayout(960, 800), { variant: 'expanded', short: false })
+  assert.deepEqual(deriveResponsiveLayout(960, 800, 320, 750), { variant: 'expanded', short: false })
   assert.deepEqual(deriveResponsiveLayout(960, 800, 420), { variant: 'intermediate', short: false })
+  assert.deepEqual(deriveResponsiveLayout(960, 800, 420, 750), { variant: 'intermediate', short: false })
 })
 
 test('sheet release selects the nearest stop and only lets a fast fling bias one stop', () => {

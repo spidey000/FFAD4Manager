@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { effectiveSheetSnap, focusTrapTarget, snapSheetHeight } from './use_responsive_layout.js'
+import { effectiveSheetSnap, focusTrapTarget, sheetSnapHeights, snapSheetHeight } from './use_responsive_layout.js'
 
 function focusableElements(root) {
   const result = []
@@ -30,8 +30,34 @@ export function useResponsiveUI(layout, appBodyRef) {
   const inspectorOpenButtonRef = useRef(null)
   const inspectorDialogRef = useRef(null)
   const restoreFocusRef = useRef(null)
+  const actionSurfaceRef = useRef(null)
+  const [workspaceSize, setWorkspaceSize] = useState({ height: 0, actionHeight: 0 })
   const effectiveSnap = effectiveSheetSnap(sheetSnap, layout.short)
-  const sheetStyle = layout.variant === 'compact' && dragSheetHeight != null ? { '--sheet-height': `${dragSheetHeight}px` } : undefined
+  const sheetStops = sheetSnapHeights(workspaceSize.height, workspaceSize.actionHeight)
+  const sheetStyle = layout.variant === 'compact' ? {
+    '--sheet-collapsed': `${sheetStops.collapsed}px`,
+    '--sheet-half': `${sheetStops.half}px`,
+    '--sheet-expanded': `${sheetStops.expanded}px`,
+    ...(dragSheetHeight != null ? { '--sheet-height': `${dragSheetHeight}px` } : {}),
+  } : undefined
+
+  useEffect(() => {
+    const body = appBodyRef.current
+    const action = actionSurfaceRef.current
+    if (!body) return
+    const measure = () => {
+      const height = body.clientHeight
+      const actionHeight = action?.getBoundingClientRect().height ?? 0
+      setWorkspaceSize(current => current.height === height && current.actionHeight === actionHeight
+        ? current : { height, actionHeight })
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(body)
+    if (action) observer.observe(action)
+    return () => observer.disconnect()
+  }, [appBodyRef, actionSurfaceRef, layout.variant])
 
   useEffect(() => {
     if (layout.variant !== 'intermediate' || !inspectorOpen) return
@@ -63,15 +89,20 @@ export function useResponsiveUI(layout, appBodyRef) {
     const drag = dragRef.current
     if (!drag) return
     if (Math.abs(event.clientY - drag.y) > 4) suppressHandleClickRef.current = true
-    setDragSheetHeight(Math.max(64, Math.min(appBodyRef.current?.clientHeight ?? 600, drag.height + drag.y - event.clientY)))
+    const available = appBodyRef.current?.clientHeight ?? 600
+    const actionHeight = actionSurfaceRef.current?.getBoundingClientRect().height ?? 0
+    const expanded = sheetSnapHeights(available, actionHeight).expanded
+    setDragSheetHeight(Math.max(64, Math.min(expanded, drag.height + drag.y - event.clientY)))
   }
   function finishSheetDrag(event) {
     const drag = dragRef.current
     if (!drag) return
     const available = appBodyRef.current?.clientHeight ?? 600
+    const actionHeight = actionSurfaceRef.current?.getBoundingClientRect().height ?? 0
     const velocity = (drag.y - event.clientY) / Math.max(1, event.timeStamp - drag.time)
-    const height = Math.max(64, Math.min(available, drag.height + drag.y - event.clientY))
-    setSheetSnap(snapSheetHeight(height, velocity, available))
+    const height = Math.max(64, Math.min(sheetSnapHeights(available, actionHeight).expanded, drag.height + drag.y - event.clientY))
+    setWorkspaceSize({ height: available, actionHeight })
+    setSheetSnap(snapSheetHeight(height, velocity, available, actionHeight))
     cancelSheetDrag()
   }
   function cancelSheetDrag() { dragRef.current = null; setDragSheetHeight(null) }
@@ -87,7 +118,7 @@ export function useResponsiveUI(layout, appBodyRef) {
   return {
     inspectorOpen, setInspectorOpen, expandedInspectorOpen, setExpandedInspectorOpen,
     sheetSnap, setSheetSnap, effectiveSnap, sheetStyle, dragging: dragSheetHeight != null,
-    inspectorOpenButtonRef, inspectorDialogRef, onModalKeyDown, openInspector,
+    inspectorOpenButtonRef, inspectorDialogRef, actionSurfaceRef, onModalKeyDown, openInspector,
     beginSheetDrag, moveSheetDrag, finishSheetDrag, cancelSheetDrag, handleSheetClick,
   }
 }

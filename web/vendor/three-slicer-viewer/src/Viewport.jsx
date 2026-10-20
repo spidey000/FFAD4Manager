@@ -84,7 +84,7 @@ export default function Viewport({
   const layout = useResponsiveLayout(shellRef)
   const responsiveUI = useResponsiveUI(layout, appBodyRef)
   const { inspectorOpen, setInspectorOpen, expandedInspectorOpen, setExpandedInspectorOpen, sheetSnap, setSheetSnap,
-    effectiveSnap, sheetStyle, inspectorOpenButtonRef, inspectorDialogRef, onModalKeyDown, openInspector,
+    effectiveSnap, sheetStyle, inspectorOpenButtonRef, inspectorDialogRef, actionSurfaceRef, onModalKeyDown, openInspector,
     beginSheetDrag, moveSheetDrag, finishSheetDrag, cancelSheetDrag, handleSheetClick } = responsiveUI
   const compact = layout.variant === 'compact'
   const intermediate = layout.variant === 'intermediate'
@@ -888,7 +888,7 @@ export default function Viewport({
           </aside></Panel>
         )}
         {ok && showPanel('sidebar') && layout.variant === 'expanded' && <ExpandedInspectorActions open={expandedInspectorOpen} onOpen={() => setExpandedInspectorOpen(true)}>{showPanel('sliceBar') && sliceAction}</ExpandedInspectorActions>}
-        {ok && showPanel('sidebar') && compact && showPanel('sliceBar') && <div className="compact-action-surface">{sliceAction}</div>}
+        {ok && showPanel('sidebar') && compact && showPanel('sliceBar') && <div ref={actionSurfaceRef} className="compact-action-surface">{sliceAction}</div>}
       </div>
       {compact && <MobileNavigation canvasMode={canvasMode} inspectorOpen={inspectorOpen} canPrepare={!gcodeOnly} canPreview={layerCount > 0} onPrepare={() => { if (!gcodeOnly) enterCanvasMode('prepare'); setInspectorOpen(false); setSheetSnap('collapsed') }} onSettings={() => { setInspectorOpen(true); setSheetSnap('half') }} onLayers={() => { if (layerCount) { enterCanvasMode('preview'); setInspectorOpen(true); setSheetSnap('half') } }} />}
       {intermediate && <IntermediateInspectorControls open={inspectorOpen} openButtonRef={inspectorOpenButtonRef} onOpen={openInspector} onScrim={() => setInspectorOpen(false)} />}

@@ -445,9 +445,9 @@
 .app-shell[data-layout="compact"] .left-rail { display: none; }
 .app-shell[data-layout="compact"] .viewport-col { position: relative; flex: 1 1 0; min-height: 0; width: 100%; }
 .app-shell[data-layout="compact"] .sidebar { position: relative; z-index: 5; flex: 0 0 64px; width: 100%; max-width: none; min-height: 0; border: 1px solid var(--_light-border); border-radius: 16px 16px 0 0; box-shadow: 0 -10px 32px rgba(0,0,0,.25); transition: flex-basis 190ms ease; }
-.app-shell[data-layout="compact"][data-sheet="collapsed"] .sidebar { flex-basis: 64px; }
-.app-shell[data-layout="compact"][data-sheet="half"] .sidebar { flex-basis: max(64px, min(52%, calc(100% - 328px))); }
-.app-shell[data-layout="compact"][data-sheet="expanded"] .sidebar { flex-basis: calc(100% - 148px); }
+.app-shell[data-layout="compact"][data-sheet="collapsed"] .sidebar { flex-basis: var(--sheet-collapsed, 64px); }
+.app-shell[data-layout="compact"][data-sheet="half"] .sidebar { flex-basis: var(--sheet-half, max(64px, min(52%, calc(100% - 328px)))); }
+.app-shell[data-layout="compact"][data-sheet="expanded"] .sidebar { flex-basis: var(--sheet-expanded, calc(100% - 148px)); }
 .app-shell[data-layout="compact"][data-dragging="true"] .sidebar { flex-basis: var(--sheet-height); }
 .app-shell[data-layout="compact"] .sidebar-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; }
 .app-shell[data-layout="compact"] .compact-action-surface { flex: 0 0 auto; order: 2; max-height: 148px; overflow-y: auto; background: var(--_light-bg); border-top: 1px solid var(--_light-border); }

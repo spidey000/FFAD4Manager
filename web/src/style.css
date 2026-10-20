@@ -18,3 +18,20 @@
   .strip-title,.strip-dimensions{grid-column:1/-1}
   .setting-select{width:100%}
 }
+
+/* Let the actual embedded viewer, not the page gutter, decide its measured layout variant on tablets. */
+@media(min-width:761px) and (max-width:1279px){
+  .station-shell{--workspace-inset:clamp(22px,5vw,76px)}
+  .workspace{position:relative;left:calc(0px - var(--workspace-inset));width:100vw;padding-inline:var(--workspace-inset)}
+  .viewport-frame{width:calc(100% + var(--workspace-inset) + var(--workspace-inset));margin-inline:calc(0px - var(--workspace-inset))}
+}
+
+/* The bleed follows the layout viewport without creating a horizontal page scroller when a vertical bar is present. */
+html,body{overflow-x:clip}
+
+/* Prevent the oversized display word from establishing a wider-than-screen minimum grid track. */
+.station-shell,.intro,.intro-copy,.machine-card,.workspace{min-width:0}
+.intro{grid-template-columns:minmax(0,1fr) minmax(0,.86fr)}
+.intro-copy{min-width:0}
+@media(max-width:760px){.intro{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:420px){.intro h1{font-size:clamp(56px,16vw,66px);max-width:100%;letter-spacing:-.045em}}

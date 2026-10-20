@@ -43,3 +43,24 @@ export function ExpandedInspectorActions({ open, onOpen, children }) {
     <div className="expanded-action-surface">{children}</div>
   </>
 }
+
+export function ResponsiveInert({ visible = true, intermediate, inspectorOpen, children }) {
+  if (!visible) return null
+  return <div className="responsive-inert-wrapper" {...(intermediate && inspectorOpen ? { inert: '' } : {})}>{children}</div>
+}
+
+export function ResponsiveActionSurfaces({ layout, responsiveUI, ok, sliceAction, showPanel }) {
+  const { compact, expandedInspectorOpen, setExpandedInspectorOpen, actionSurfaceRef } = responsiveUI
+  return <>
+    {ok && showPanel('sidebar') && layout.variant === 'expanded' && <ExpandedInspectorActions open={expandedInspectorOpen} onOpen={() => setExpandedInspectorOpen(true)}>{showPanel('sliceBar') && sliceAction}</ExpandedInspectorActions>}
+    {ok && showPanel('sidebar') && compact && showPanel('sliceBar') && <div ref={actionSurfaceRef} className="compact-action-surface">{sliceAction}</div>}
+  </>
+}
+
+export function ResponsiveNavigation({ responsiveUI, canvasMode, gcodeOnly, layerCount, enterCanvasMode }) {
+  const { compact, intermediate, inspectorOpen, setInspectorOpen, inspectorOpenButtonRef, openInspector, requestSheetSnap } = responsiveUI
+  return <>
+    {compact && <MobileNavigation canvasMode={canvasMode} inspectorOpen={inspectorOpen} canPrepare={!gcodeOnly} canPreview={layerCount > 0} onPrepare={() => { if (!gcodeOnly) enterCanvasMode('prepare'); setInspectorOpen(false); requestSheetSnap('collapsed') }} onSettings={() => { setInspectorOpen(true); requestSheetSnap('half') }} onLayers={() => { if (layerCount) { enterCanvasMode('preview'); setInspectorOpen(true); requestSheetSnap('half') } }} />}
+    {intermediate && <IntermediateInspectorControls open={inspectorOpen} openButtonRef={inspectorOpenButtonRef} onOpen={openInspector} onScrim={() => setInspectorOpen(false)} />}
+  </>
+}

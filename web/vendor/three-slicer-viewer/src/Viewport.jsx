@@ -38,7 +38,7 @@ import {
 } from './ui/index.js'
 import { DEFAULT_BED, DEFAULT_LINE_WIDTH } from './core/viewer_defaults.js'
 import { THEME_CSS } from './core/theme.js'
-import { InspectorControls, MobileNavigation, IntermediateInspectorControls, ExpandedInspectorActions } from './ui/ResponsiveControls.jsx'
+import { InspectorControls, ResponsiveActionSurfaces, ResponsiveInert, ResponsiveNavigation } from './ui/ResponsiveControls.jsx'
 
 // 3D viewport + browser-only slicing (WASM, track C stage 4).
 //  - Slice parameters are derived from the right-hand editor panel values (deriveKernelParams) — no duplicate form.
@@ -84,8 +84,8 @@ export default function Viewport({
   const layout = useResponsiveLayout(shellRef)
   const responsiveUI = useResponsiveUI(layout, appBodyRef)
   const { compact, intermediate, inspectorOpen, setInspectorOpen, expandedInspectorOpen, setExpandedInspectorOpen,
-    requestSheetSnap, stepSheet, returnToScene,
-    effectiveSnap, sheetStyle, inspectorOpenButtonRef, inspectorDialogRef, actionSurfaceRef, onModalKeyDown, openInspector,
+    stepSheet, returnToScene,
+    effectiveSnap, sheetStyle, inspectorDialogRef, onModalKeyDown,
     beginSheetDrag, moveSheetDrag, finishSheetDrag, cancelSheetDrag, handleSheetClick } = responsiveUI
   // Two frames, one derivation (core/plate_settings.js plateContext): `globalFrame` is the GLOBAL map's own —
   //  what is laid out once (the uniform grid cell, a project import's fallback bed, the 3mf stride, the global
@@ -716,14 +716,10 @@ export default function Viewport({
         onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) loadPresetFile(f) }}
         data-testid="preset-input" style={{ display: 'none' }} />
 
-      {showPanel('topBar') && <div className="responsive-inert-wrapper" {...(intermediate && inspectorOpen ? { inert: '' } : {})}>
-        <TopBar layout={layout.variant} showTabs={ok} canvasMode={canvasMode} onCanvasMode={enterCanvasMode} prepareEnabled={!gcodeOnly} gcodeJob={gcode == null && importedGcode} onCloseGcode={closeImportedGcode}
-          previewEnabled={layerCount > 0} onOpen={openFilePicker} onSaveProject={exportProject} onExportSTL={exportSTL} canSave={objects.length > 0} exporting={exporting} onUndo={() => travelHistory('undo')} onRedo={() => travelHistory('redo')} canUndo={historyDepth.undo > 0 && canvasMode === 'prepare'} canRedo={historyDepth.redo > 0 && canvasMode === 'prepare'} />
-      </div>}
+      <ResponsiveInert visible={showPanel('topBar')} intermediate={intermediate} inspectorOpen={inspectorOpen}><TopBar layout={layout.variant} showTabs={ok} canvasMode={canvasMode} onCanvasMode={enterCanvasMode} prepareEnabled={!gcodeOnly} gcodeJob={gcode == null && importedGcode} onCloseGcode={closeImportedGcode} previewEnabled={layerCount > 0} onOpen={openFilePicker} onSaveProject={exportProject} onExportSTL={exportSTL} canSave={objects.length > 0} exporting={exporting} onUndo={() => travelHistory('undo')} onRedo={() => travelHistory('redo')} canUndo={historyDepth.undo > 0 && canvasMode === 'prepare'} canRedo={historyDepth.redo > 0 && canvasMode === 'prepare'} /></ResponsiveInert>
 
       <div ref={appBodyRef} className="app-body">
-        {ok && canvasMode === 'prepare' && showPanel('gizmoRail') && <div className="responsive-inert-wrapper" {...(intermediate && inspectorOpen ? { inert: '' } : {})}>
-          <GizmoRail gizmoMode={gmode} paintMode={paintMode} onGizmo={m => { setPaintMode('off'); apiRef.current?.setMode(m) }} onTogglePaint={togglePaintGizmo} paintEnabled={tech !== 'SLA'} /></div>}
+        <ResponsiveInert visible={ok && canvasMode === 'prepare' && showPanel('gizmoRail')} intermediate={intermediate} inspectorOpen={inspectorOpen}><GizmoRail gizmoMode={gmode} paintMode={paintMode} onGizmo={m => { setPaintMode('off'); apiRef.current?.setMode(m) }} onTogglePaint={togglePaintGizmo} paintEnabled={tech !== 'SLA'} /></ResponsiveInert>
 
         {/* Center viewport */}
         <div className="viewport-col" {...(intermediate && inspectorOpen ? { inert: '' } : {})}>
@@ -802,8 +798,7 @@ export default function Viewport({
         {/* S4 right sidebar */}
         {ok && showPanel('sidebar') && (
           <Panel panels={panels} name="sidebar"><aside ref={inspectorDialogRef} className="sidebar" data-sidebar-open={layout.variant === 'expanded' && expandedInspectorOpen || undefined} style={sheetStyle} aria-label={intermediate ? 'Settings inspector' : 'Inspector'} role={intermediate && inspectorOpen ? 'dialog' : undefined} aria-modal={intermediate && inspectorOpen ? 'true' : undefined} tabIndex={intermediate && inspectorOpen ? -1 : undefined}>
-            <InspectorControls compact={compact} intermediate={intermediate} expanded={layout.variant === 'expanded'} snap={effectiveSnap} onStep={stepSheet} onReturn={returnToScene}
-              onDown={beginSheetDrag} onMove={moveSheetDrag} onUp={finishSheetDrag} onCancel={cancelSheetDrag} onHandleClick={handleSheetClick} onClose={() => setInspectorOpen(false)} onFold={() => setExpandedInspectorOpen(false)} />
+            <InspectorControls compact={compact} intermediate={intermediate} expanded={layout.variant === 'expanded'} snap={effectiveSnap} onStep={stepSheet} onReturn={returnToScene} onDown={beginSheetDrag} onMove={moveSheetDrag} onUp={finishSheetDrag} onCancel={cancelSheetDrag} onHandleClick={handleSheetClick} onClose={() => setInspectorOpen(false)} onFold={() => setExpandedInspectorOpen(false)} />
             <div className="sidebar-scroll">
               {showPanel('printerCard') && (
                 <Panel panels={panels} name="printerCard">
@@ -886,11 +881,9 @@ export default function Viewport({
             {showPanel('sliceBar') && layout.variant === 'intermediate' && sliceAction}
           </aside></Panel>
         )}
-        {ok && showPanel('sidebar') && layout.variant === 'expanded' && <ExpandedInspectorActions open={expandedInspectorOpen} onOpen={() => setExpandedInspectorOpen(true)}>{showPanel('sliceBar') && sliceAction}</ExpandedInspectorActions>}
-        {ok && showPanel('sidebar') && compact && showPanel('sliceBar') && <div ref={actionSurfaceRef} className="compact-action-surface">{sliceAction}</div>}
+        <ResponsiveActionSurfaces {...{ layout, responsiveUI, ok, sliceAction, showPanel }} />
       </div>
-      {compact && <MobileNavigation canvasMode={canvasMode} inspectorOpen={inspectorOpen} canPrepare={!gcodeOnly} canPreview={layerCount > 0} onPrepare={() => { if (!gcodeOnly) enterCanvasMode('prepare'); setInspectorOpen(false); requestSheetSnap('collapsed') }} onSettings={() => { setInspectorOpen(true); requestSheetSnap('half') }} onLayers={() => { if (layerCount) { enterCanvasMode('preview'); setInspectorOpen(true); requestSheetSnap('half') } }} />}
-      {intermediate && <IntermediateInspectorControls open={inspectorOpen} openButtonRef={inspectorOpenButtonRef} onOpen={openInspector} onScrim={() => setInspectorOpen(false)} />}
+      <ResponsiveNavigation {...{ responsiveUI, canvasMode, gcodeOnly, layerCount, enterCanvasMode }} />
     </div>
     </ShadowHost>
   )

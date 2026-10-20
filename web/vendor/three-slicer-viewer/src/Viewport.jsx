@@ -12,7 +12,8 @@ import { objectTools } from './core/toolbar_items.js'
 import { makeKeyHandler } from './core/shortcut_keymap.js'
 import { setLogging } from './core/log.js'
 import { useStateRef } from './hooks/use_state_ref.js'
-import { effectiveSheetSnap, snapSheetHeight, useResponsiveLayout } from './hooks/use_responsive_layout.js'
+import { useResponsiveLayout } from './hooks/use_responsive_layout.js'
+import { useResponsiveUI } from './hooks/use_responsive_ui.js'
 import { useHostEvents } from './hooks/use_host_events.js'
 import { useInjection, useImportedGcode } from './hooks/use_injection.js'
 import { useMoveScrub } from './hooks/use_move_scrub.js'
@@ -37,6 +38,7 @@ import {
 } from './ui/index.js'
 import { DEFAULT_BED, DEFAULT_LINE_WIDTH } from './core/viewer_defaults.js'
 import { THEME_CSS } from './core/theme.js'
+import { InspectorControls, MobileNavigation, IntermediateInspectorControls, ExpandedInspectorActions } from './ui/ResponsiveControls.jsx'
 
 // 3D viewport + browser-only slicing (WASM, track C stage 4).
 //  - Slice parameters are derived from the right-hand editor panel values (deriveKernelParams) — no duplicate form.
@@ -60,25 +62,6 @@ const Panel = ({ panels, name, children }) => (panels?.[name] === 'readonly'
   ? <div className="vp-readonly" inert="">{children}</div>
   : children)
 
-function deepFocusable(root) {
-  const selector = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-  const result = []
-  const visit = node => {
-    for (const element of node.querySelectorAll?.(selector) ?? []) {
-      if (element.getClientRects().length) result.push(element)
-      if (element.shadowRoot) visit(element.shadowRoot)
-    }
-  }
-  visit(root)
-  return result
-}
-
-function deepestActiveElement(root = document) {
-  let active = root.activeElement
-  while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement
-  return active
-}
-
 // Embedding surface (all optional — omitting every one of them is the standalone app this component has always been):
 //  · panels    — per-panel visibility, {name: false} hides. Everything defaults to visible, so a host opts OUT only.
 //  · gcode     — G-code text rendered instead of a slice result (no kernel run). See the injection effect below.
@@ -99,54 +82,12 @@ export default function Viewport({
   const shellRef = useRef(null)
   const appBodyRef = useRef(null)
   const layout = useResponsiveLayout(shellRef)
-  const [inspectorOpen, setInspectorOpen] = useState(false)
-  const [expandedInspectorOpen, setExpandedInspectorOpen] = useState(true)
-  const [sheetSnap, setSheetSnap] = useState('collapsed')
-  const sheetDragRef = useRef(null)
-  const suppressHandleClickRef = useRef(false)
-  const [dragSheetHeight, setDragSheetHeight] = useState(null)
-  const inspectorOpenButtonRef = useRef(null)
-  const inspectorDialogRef = useRef(null)
-  const restoreFocusRef = useRef(null)
+  const responsiveUI = useResponsiveUI(layout, appBodyRef)
+  const { inspectorOpen, setInspectorOpen, expandedInspectorOpen, setExpandedInspectorOpen, sheetSnap, setSheetSnap,
+    effectiveSnap, sheetStyle, inspectorOpenButtonRef, inspectorDialogRef, onModalKeyDown, openInspector,
+    beginSheetDrag, moveSheetDrag, finishSheetDrag, cancelSheetDrag, handleSheetClick } = responsiveUI
   const compact = layout.variant === 'compact'
   const intermediate = layout.variant === 'intermediate'
-  const effectiveSnap = effectiveSheetSnap(sheetSnap, layout.short)
-  const sheetStyle = compact && dragSheetHeight != null ? { '--sheet-height': `${dragSheetHeight}px` } : undefined
-  const snapSheet = () => setSheetSnap(value => value === 'collapsed' ? 'half' : value === 'half' ? 'expanded' : 'collapsed')
-
-  useEffect(() => {
-    if (!intermediate || !inspectorOpen) return
-    const dialog = inspectorDialogRef.current
-    const focusables = deepFocusable(dialog)
-    ;(focusables[0] ?? dialog)?.focus?.({ preventScroll: true })
-    return () => { restoreFocusRef.current?.focus?.({ preventScroll: true }); restoreFocusRef.current = null }
-  }, [intermediate, inspectorOpen])
-
-  function onModalKeyDown(event) {
-    if (!intermediate || !inspectorOpen) return
-    if (event.key === 'Escape') {
-      event.preventDefault(); event.stopPropagation(); setInspectorOpen(false); return
-    }
-    if (event.key !== 'Tab') return
-    const dialog = inspectorDialogRef.current
-    const focusables = deepFocusable(dialog)
-    if (!focusables.length) { event.preventDefault(); dialog?.focus(); return }
-    const active = deepestActiveElement()
-    const index = focusables.indexOf(active)
-    if (event.shiftKey && (index <= 0)) { event.preventDefault(); focusables.at(-1).focus() }
-    else if (!event.shiftKey && (index === -1 || index === focusables.length - 1)) { event.preventDefault(); focusables[0].focus() }
-  }
-
-  function endSheetDrag(event) {
-    const drag = sheetDragRef.current
-    if (!drag) return
-    const elapsed = Math.max(1, event.timeStamp - drag.time)
-    const velocity = (drag.y - event.clientY) / elapsed
-    const height = Math.max(64, Math.min(appBodyRef.current?.clientHeight ?? 600, drag.height + drag.y - event.clientY))
-    setSheetSnap(snapSheetHeight(height, velocity, appBodyRef.current?.clientHeight ?? 600))
-    sheetDragRef.current = null
-    setDragSheetHeight(null)
-  }
   // Two frames, one derivation (core/plate_settings.js plateContext): `globalFrame` is the GLOBAL map's own —
   //  what is laid out once (the uniform grid cell, a project import's fallback bed, the 3mf stride, the global
   //  bed inputs); `ctx` (assigned below the state block — it needs selectedPlate; showPanel closes over `tech`)
@@ -751,16 +692,11 @@ export default function Viewport({
   const statsBlock = <StatsCard stats={statsWithTools} overBed={overBed} overBedText={bedOverText}
     overBedModel={stats?.overBedModel !== false} extruderColors={plateToolColors(selectedPlateRef.current)}
     filamentTypes={asList('filament_type')} filamentIds={asList('filament_settings_id')} />
-  const sliceAction = <Panel panels={panels} name="sliceBar"><SliceBar autoSlice={autoSlice} onAutoSlice={setAutoSlice} slicing={slicing} progress={progress} sliceRate={sliceRate}
-    plateCount={plateCount} selectedPlate={selectedPlate} sliceMenuOpen={sliceMenu} plateRun={plateRun} kernelKind={kernelKind}
-    workers={Number(settings?.slice_workers) || 0} autoWorkers={autoWorkers} maxWorkers={cores} memoryWorkers={memoryWorkers}
-    onSetting={(key, value) => setSettings?.(prev => ({ ...prev, [key]: value }))} gpuSetting={settings?.gpu_acceleration}
-    onSliceMenu={() => setSliceMenu(v => !v)} slicedPlateCount={slicedPlateCount} canSlice={objects.length > 0 && !gcodeOnly}
-    onSlice={onSlice} onCancel={cancelSlice} onExportAll={exportAllGcode} gcodeReady={!!gcodeResult}
-    onExportGcode={() => exportPlainGcode(gcodeResult)} slaResult={!!plateResultsRef.current[selectedPlate]?.stats?.sla} slaTech={tech === 'SLA'}
-    onExportSl1={() => exportPlateSl1()} exporting={exporting} sl1Ready={sl1Ready} onExportGcode3mf={exportAllGcode}
-    onExportPlateGcode3mf={() => exportPlateGcode3mf()} bedWarning={bedOver || overBed
-      ? `${stats?.overBedModel === false ? 'the toolpaths extend' : 'the model extends'} beyond the ${tech === 'SLA' ? 'resin display' : 'bed'}` + (bedOverText ? ` by ${bedOverText}` : '') : ''} /></Panel>
+  const sliceAction = <Panel panels={panels} name="sliceBar"><SliceBar autoSlice={autoSlice} onAutoSlice={setAutoSlice} slicing={slicing} progress={progress} sliceRate={sliceRate} plateCount={plateCount} selectedPlate={selectedPlate} sliceMenuOpen={sliceMenu}
+    plateRun={plateRun} kernelKind={kernelKind} workers={Number(settings?.slice_workers) || 0} autoWorkers={autoWorkers} maxWorkers={cores} memoryWorkers={memoryWorkers}
+    onSetting={(key, value) => setSettings?.(prev => ({ ...prev, [key]: value }))} gpuSetting={settings?.gpu_acceleration} onSliceMenu={() => setSliceMenu(v => !v)} slicedPlateCount={slicedPlateCount} canSlice={objects.length > 0 && !gcodeOnly}
+    onSlice={onSlice} onCancel={cancelSlice} onExportAll={exportAllGcode} gcodeReady={!!gcodeResult} onExportGcode={() => exportPlainGcode(gcodeResult)} slaResult={!!plateResultsRef.current[selectedPlate]?.stats?.sla} slaTech={tech === 'SLA'} onExportSl1={() => exportPlateSl1()}
+    exporting={exporting} sl1Ready={sl1Ready} onExportGcode3mf={exportAllGcode} onExportPlateGcode3mf={() => exportPlateGcode3mf()} bedWarning={bedOver || overBed ? `${stats?.overBedModel === false ? 'the toolpaths extend' : 'the model extends'} beyond the ${tech === 'SLA' ? 'resin display' : 'bed'}` + (bedOverText ? ` by ${bedOverText}` : '') : ''} /></Panel>
 
   // registerLoader() can add formats, so this is computed at render time.
   // .sl1 and G-code ride on the same picker but are not in SUPPORTED_EXT — that list is the MESH loaders', and
@@ -774,30 +710,21 @@ export default function Viewport({
         shortcut a host application is likely to own as well (text fields, its own editor), so it must not leak out
         of the viewer — an element listener only fires when focus is inside, which is exactly the rule wanted. The
         canvas is given a tabIndex below so that clicking it counts as being inside. */}
-    <div ref={shellRef} className="app-shell" data-layout={layout.variant} data-short={layout.short || undefined} data-inspector-open={inspectorOpen || undefined} data-sidebar-open={expandedInspectorOpen || undefined} data-sheet={effectiveSnap} data-dragging={dragSheetHeight != null || undefined} onKeyDown={event => { onShellKey(event); onModalKeyDown(event) }}>
+    <div ref={shellRef} className="app-shell" data-layout={layout.variant} data-short={layout.short || undefined} data-inspector-open={inspectorOpen || undefined} data-sidebar-open={expandedInspectorOpen || undefined} data-sheet={effectiveSnap} data-dragging={responsiveUI.dragging || undefined} onKeyDown={event => { onShellKey(event); onModalKeyDown(event) }}>
       {/* Shared hidden file input */}
       <input ref={fileInputRef} type="file" accept={PICKER_EXT.map(e => '.' + e).join(',')} multiple onChange={e => { recordHistory(); onFiles(e) }} title={`${EXT_LABEL} (multiple files allowed)`} data-testid="stl-input" style={{ display: 'none' }} />
       <input ref={presetInputRef} type="file" accept={PRESET_ACCEPT}
         onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) loadPresetFile(f) }}
         data-testid="preset-input" style={{ display: 'none' }} />
 
-      {showPanel('topBar') && (
-        <div className="responsive-inert-wrapper" {...(intermediate && inspectorOpen ? { inert: '' } : {})}><TopBar showTabs={ok} canvasMode={canvasMode} onCanvasMode={enterCanvasMode} prepareEnabled={!gcodeOnly} gcodeJob={gcode == null && importedGcode} onCloseGcode={closeImportedGcode}
-          previewEnabled={layerCount > 0} onOpen={openFilePicker}
-          onSaveProject={exportProject} onExportSTL={exportSTL} canSave={objects.length > 0} exporting={exporting}
-          onUndo={() => travelHistory('undo')} onRedo={() => travelHistory('redo')}
-          canUndo={historyDepth.undo > 0 && canvasMode === 'prepare'}
-          canRedo={historyDepth.redo > 0 && canvasMode === 'prepare'} /></div>
-      )}
+      {showPanel('topBar') && <div className="responsive-inert-wrapper" {...(intermediate && inspectorOpen ? { inert: '' } : {})}>
+        <TopBar showTabs={ok} canvasMode={canvasMode} onCanvasMode={enterCanvasMode} prepareEnabled={!gcodeOnly} gcodeJob={gcode == null && importedGcode} onCloseGcode={closeImportedGcode}
+          previewEnabled={layerCount > 0} onOpen={openFilePicker} onSaveProject={exportProject} onExportSTL={exportSTL} canSave={objects.length > 0} exporting={exporting} onUndo={() => travelHistory('undo')} onRedo={() => travelHistory('redo')} canUndo={historyDepth.undo > 0 && canvasMode === 'prepare'} canRedo={historyDepth.redo > 0 && canvasMode === 'prepare'} />
+      </div>}
 
       <div ref={appBodyRef} className="app-body">
-        {ok && canvasMode === 'prepare' && showPanel('gizmoRail') && (
-          <div className="responsive-inert-wrapper" {...(intermediate && inspectorOpen ? { inert: '' } : {})}>
-          <GizmoRail gizmoMode={gmode} paintMode={paintMode}
-            onGizmo={m => { setPaintMode('off'); apiRef.current?.setMode(m) }}
-            onTogglePaint={togglePaintGizmo} paintEnabled={tech !== 'SLA'} />
-          </div>
-        )}
+        {ok && canvasMode === 'prepare' && showPanel('gizmoRail') && <div className="responsive-inert-wrapper" {...(intermediate && inspectorOpen ? { inert: '' } : {})}>
+          <GizmoRail gizmoMode={gmode} paintMode={paintMode} onGizmo={m => { setPaintMode('off'); apiRef.current?.setMode(m) }} onTogglePaint={togglePaintGizmo} paintEnabled={tech !== 'SLA'} /></div>}
 
         {/* Center viewport */}
         <div className="viewport-col" {...(intermediate && inspectorOpen ? { inert: '' } : {})}>
@@ -875,20 +802,9 @@ export default function Viewport({
 
         {/* S4 right sidebar */}
         {ok && showPanel('sidebar') && (
-          <Panel panels={panels} name="sidebar"><aside ref={inspectorDialogRef} className="sidebar" data-sidebar-open={layout.variant === 'expanded' && expandedInspectorOpen || undefined} style={sheetStyle}
-            aria-label={intermediate ? 'Settings inspector' : 'Inspector'} role={intermediate && inspectorOpen ? 'dialog' : undefined}
-            aria-modal={intermediate && inspectorOpen ? 'true' : undefined} tabIndex={intermediate && inspectorOpen ? -1 : undefined}>
-            {compact && <div className="sheet-controls">
-              <button className="sheet-handle" aria-label={`Inspector height: ${effectiveSnap}; activate to change`}
-                onPointerDown={event => { sheetDragRef.current = { y: event.clientY, height: event.currentTarget.closest('.sidebar')?.getBoundingClientRect().height ?? 64, time: event.timeStamp }; suppressHandleClickRef.current = false; event.currentTarget.setPointerCapture(event.pointerId) }}
-                onPointerMove={event => { const drag = sheetDragRef.current; if (drag) { if (Math.abs(event.clientY - drag.y) > 4) { drag.moved = true; suppressHandleClickRef.current = true }; setDragSheetHeight(Math.max(64, Math.min(appBodyRef.current?.clientHeight ?? 600, drag.height + drag.y - event.clientY))) } }}
-                onPointerUp={endSheetDrag} onPointerCancel={event => { sheetDragRef.current = null; setDragSheetHeight(null) }}
-                onLostPointerCapture={() => { sheetDragRef.current = null; setDragSheetHeight(null) }} onClick={event => { if (suppressHandleClickRef.current) { suppressHandleClickRef.current = false; event.preventDefault(); return }; snapSheet() }}><span /></button>
-              <button className="sheet-step" onClick={snapSheet} aria-label="Expand or collapse inspector">{sheetSnap === 'expanded' ? 'Collapse' : 'Expand'}</button>
-              {effectiveSnap === 'expanded' && <button className="sheet-return" onClick={() => setSheetSnap('collapsed')}>Return to scene</button>}
-            </div>}
-            {intermediate && <button className="inspector-close" onClick={() => setInspectorOpen(false)} aria-label="Close settings">×</button>}
-            {layout.variant === 'expanded' && <button className="inspector-fold" onClick={() => setExpandedInspectorOpen(false)} aria-label="Close inspector">Close inspector</button>}
+          <Panel panels={panels} name="sidebar"><aside ref={inspectorDialogRef} className="sidebar" data-sidebar-open={layout.variant === 'expanded' && expandedInspectorOpen || undefined} style={sheetStyle} aria-label={intermediate ? 'Settings inspector' : 'Inspector'} role={intermediate && inspectorOpen ? 'dialog' : undefined} aria-modal={intermediate && inspectorOpen ? 'true' : undefined} tabIndex={intermediate && inspectorOpen ? -1 : undefined}>
+            <InspectorControls compact={compact} intermediate={intermediate} expanded={layout.variant === 'expanded'} snap={effectiveSnap} onStep={() => setSheetSnap(value => value === 'collapsed' ? 'half' : value === 'half' ? 'expanded' : 'collapsed')} onReturn={() => setSheetSnap('collapsed')}
+              onDown={beginSheetDrag} onMove={moveSheetDrag} onUp={finishSheetDrag} onCancel={cancelSheetDrag} onHandleClick={handleSheetClick} onClose={() => setInspectorOpen(false)} onFold={() => setExpandedInspectorOpen(false)} />
             <div className="sidebar-scroll">
               {showPanel('printerCard') && (
                 <Panel panels={panels} name="printerCard">
@@ -971,19 +887,11 @@ export default function Viewport({
             {showPanel('sliceBar') && layout.variant === 'intermediate' && sliceAction}
           </aside></Panel>
         )}
-        {ok && showPanel('sidebar') && layout.variant === 'expanded' && <>
-          {!expandedInspectorOpen && <button className="inspector-reopen" onClick={() => setExpandedInspectorOpen(true)}>Open inspector</button>}
-          {showPanel('sliceBar') && <div className="expanded-action-surface">{sliceAction}</div>}
-        </>}
+        {ok && showPanel('sidebar') && layout.variant === 'expanded' && <ExpandedInspectorActions open={expandedInspectorOpen} onOpen={() => setExpandedInspectorOpen(true)}>{showPanel('sliceBar') && sliceAction}</ExpandedInspectorActions>}
         {ok && showPanel('sidebar') && compact && showPanel('sliceBar') && <div className="compact-action-surface">{sliceAction}</div>}
       </div>
-      {compact && <nav className="mobile-navigation" aria-label="Viewer sections">
-        <button aria-pressed={!inspectorOpen && canvasMode === 'prepare'} disabled={!!gcodeOnly} title={gcodeOnly ? 'Close the imported G-code to prepare a model' : undefined} onClick={() => { if (!gcodeOnly) enterCanvasMode('prepare'); setInspectorOpen(false); setSheetSnap('collapsed') }}>Model</button>
-        <button aria-pressed={inspectorOpen} onClick={() => { setInspectorOpen(true); setSheetSnap('half') }}>Settings</button>
-        <button aria-pressed={canvasMode === 'preview'} disabled={!layerCount} title={!layerCount ? 'Slice to view layers' : undefined} onClick={() => { if (layerCount) { enterCanvasMode('preview'); setInspectorOpen(true); setSheetSnap('half') } }}>Layers</button>
-      </nav>}
-      {intermediate && inspectorOpen && <button className="inspector-scrim" aria-label="Close settings" onClick={() => setInspectorOpen(false)} />}
-      {intermediate && <button ref={inspectorOpenButtonRef} className="inspector-open" onClick={() => { restoreFocusRef.current = inspectorOpenButtonRef.current; setInspectorOpen(true) }} aria-label="Open settings">Settings</button>}
+      {compact && <MobileNavigation canvasMode={canvasMode} inspectorOpen={inspectorOpen} canPrepare={!gcodeOnly} canPreview={layerCount > 0} onPrepare={() => { if (!gcodeOnly) enterCanvasMode('prepare'); setInspectorOpen(false); setSheetSnap('collapsed') }} onSettings={() => { setInspectorOpen(true); setSheetSnap('half') }} onLayers={() => { if (layerCount) { enterCanvasMode('preview'); setInspectorOpen(true); setSheetSnap('half') } }} />}
+      {intermediate && <IntermediateInspectorControls open={inspectorOpen} openButtonRef={inspectorOpenButtonRef} onOpen={openInspector} onScrim={() => setInspectorOpen(false)} />}
     </div>
     </ShadowHost>
   )

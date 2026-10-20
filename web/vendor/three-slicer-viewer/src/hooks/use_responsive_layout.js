@@ -28,6 +28,13 @@ export function effectiveSheetSnap(preferred, short) {
   return short ? 'collapsed' : preferred
 }
 
+export function focusTrapTarget(index, count, backwards) {
+  if (!count) return null
+  if (backwards && index <= 0) return count - 1
+  if (!backwards && (index < 0 || index === count - 1)) return 0
+  return null
+}
+
 export function useResponsiveLayout(ref, inspectorWidth = 320) {
   const [size, setSize] = useState({ width: 0, height: 0 })
   useEffect(() => {

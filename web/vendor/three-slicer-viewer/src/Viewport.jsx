@@ -12,6 +12,7 @@ import { objectTools } from './core/toolbar_items.js'
 import { makeKeyHandler } from './core/shortcut_keymap.js'
 import { setLogging } from './core/log.js'
 import { useStateRef } from './hooks/use_state_ref.js'
+import { useResponsiveLayout } from './hooks/use_responsive_layout.js'
 import { useHostEvents } from './hooks/use_host_events.js'
 import { useInjection, useImportedGcode } from './hooks/use_injection.js'
 import { useMoveScrub } from './hooks/use_move_scrub.js'
@@ -76,6 +77,16 @@ export default function Viewport({
   panels = null, features = null, gcode = null, sl1 = null, files = null, defaultExtruderColors = null, defaultAutoSlice = false,
   sliceRequest = null, onEvent = null, onSliced = null, onSliceRun = null, onExport = null, catalog: catalogProp, slicer: useSlicer = useNoopSlicer,
 }) {
+  const shellRef = useRef(null)
+  const layout = useResponsiveLayout(shellRef)
+  const [inspectorOpen, setInspectorOpen] = useState(false)
+  const [sheetSnap, setSheetSnap] = useState('collapsed')
+  const sheetDragRef = useRef(null)
+  const [sheetHeight, setSheetHeight] = useState(64)
+  const compact = layout.variant === 'compact'
+  const intermediate = layout.variant === 'intermediate'
+  const sheetStyle = compact ? { '--sheet-height': `${sheetHeight}px` } : undefined
+  const snapSheet = () => setSheetSnap(value => value === 'collapsed' ? 'half' : value === 'half' ? 'expanded' : 'collapsed')
   // Two frames, one derivation (core/plate_settings.js plateContext): `globalFrame` is the GLOBAL map's own —
   //  what is laid out once (the uniform grid cell, a project import's fallback bed, the 3mf stride, the global
   //  bed inputs); `ctx` (assigned below the state block — it needs selectedPlate; showPanel closes over `tech`)
@@ -693,7 +704,7 @@ export default function Viewport({
         shortcut a host application is likely to own as well (text fields, its own editor), so it must not leak out
         of the viewer — an element listener only fires when focus is inside, which is exactly the rule wanted. The
         canvas is given a tabIndex below so that clicking it counts as being inside. */}
-    <div className="app-shell" onKeyDown={onShellKey}>
+    <div ref={shellRef} className="app-shell" data-layout={layout.variant} data-short={layout.short || undefined} data-inspector-open={inspectorOpen || undefined} data-sheet={sheetSnap} onKeyDown={onShellKey}>
       {/* Shared hidden file input */}
       <input ref={fileInputRef} type="file" accept={PICKER_EXT.map(e => '.' + e).join(',')} multiple onChange={e => { recordHistory(); onFiles(e) }} title={`${EXT_LABEL} (multiple files allowed)`} data-testid="stl-input" style={{ display: 'none' }} />
       <input ref={presetInputRef} type="file" accept={PRESET_ACCEPT}
@@ -717,7 +728,7 @@ export default function Viewport({
         )}
 
         {/* Center viewport */}
-        <div className="viewport-col">
+        <div className="viewport-col" {...(intermediate && inspectorOpen ? { inert: '' } : {})}>
           {/* tabIndex + focus on press: a plain div cannot receive key events, which is why every other shortcut
               had to live on window. Ctrl+Z is scoped to this component instead, and this is what lets a click on
               the 3D view count as "inside" it. */}
@@ -792,7 +803,16 @@ export default function Viewport({
 
         {/* S4 right sidebar */}
         {ok && showPanel('sidebar') && (
-          <Panel panels={panels} name="sidebar"><aside className="sidebar">
+          <Panel panels={panels} name="sidebar"><aside className="sidebar" style={sheetStyle} aria-label="Inspector">
+            {compact && <div className="sheet-controls">
+              <button className="sheet-handle" aria-label="Change inspector height" aria-valuetext={sheetSnap} onClick={snapSheet}
+                onPointerDown={event => { sheetDragRef.current = { y: event.clientY, height: sheetHeight }; event.currentTarget.setPointerCapture(event.pointerId) }}
+                onPointerMove={event => { if (!sheetDragRef.current) return; const next = Math.max(64, Math.min(shellRef.current?.clientHeight ?? 600, sheetDragRef.current.height + sheetDragRef.current.y - event.clientY)); setSheetHeight(next) }}
+                onPointerUp={event => { if (!sheetDragRef.current) return; const delta = sheetDragRef.current.y - event.clientY; setSheetSnap(delta > 90 ? 'expanded' : delta < -70 ? 'collapsed' : 'half'); sheetDragRef.current = null }}><span /></button>
+              <button className="sheet-step" onClick={snapSheet} aria-label="Expand or collapse inspector">{sheetSnap === 'expanded' ? 'Collapse' : 'Expand'}</button>
+              {sheetSnap === 'expanded' && <button className="sheet-return" onClick={() => setSheetSnap('collapsed')}>Return to scene</button>}
+            </div>}
+            {intermediate && <button className="inspector-close" onClick={() => setInspectorOpen(false)} aria-label="Close settings">×</button>}
             <div className="sidebar-scroll">
               {showPanel('printerCard') && (
                 <Panel panels={panels} name="printerCard">
@@ -892,6 +912,13 @@ export default function Viewport({
           </aside></Panel>
         )}
       </div>
+      {compact && <nav className="mobile-navigation" aria-label="Viewer sections">
+        <button aria-pressed={!inspectorOpen && canvasMode === 'prepare'} disabled={!!gcodeOnly} title={gcodeOnly ? 'Close the imported G-code to prepare a model' : undefined} onClick={() => { if (!gcodeOnly) enterCanvasMode('prepare'); setInspectorOpen(false); setSheetSnap('collapsed') }}>Model</button>
+        <button aria-pressed={inspectorOpen} onClick={() => { setInspectorOpen(true); setSheetSnap('half') }}>Settings</button>
+        <button aria-pressed={canvasMode === 'preview'} disabled={!layerCount} title={!layerCount ? 'Slice to view layers' : undefined} onClick={() => { if (layerCount) { enterCanvasMode('preview'); setInspectorOpen(true); setSheetSnap('half') } }}>Layers</button>
+      </nav>}
+      {intermediate && inspectorOpen && <button className="inspector-scrim" aria-label="Close settings" onClick={() => setInspectorOpen(false)} />}
+      {intermediate && <button className="inspector-open" onClick={() => setInspectorOpen(true)} aria-label="Open settings">Settings</button>}
     </div>
     </ShadowHost>
   )

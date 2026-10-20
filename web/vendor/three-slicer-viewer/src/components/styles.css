@@ -73,6 +73,25 @@
 /* ---- Embedded variant (sp-embedded on :host — full width inside cards such as the viewer process-card) ---- */
 :host(.sp-embedded) .settings-panel { position: static; width: auto; flex: none; border: 0; height: auto; }
 :host(.sp-embedded) .sp-body { padding: 4px 2px 8px; max-height: 460px; }
+:host(.sp-embedded) .settings-panel { min-width: 0; }
+:host(.sp-embedded) .sp-top { padding: 8px; }
+:host(.sp-embedded) .sp-builder { flex-wrap: wrap; }
+:host(.sp-embedded) .sp-pages button, :host(.sp-embedded) .sp-modes button { min-height: 40px; }
+:host(.sp-embedded) .row { grid-template-columns: minmax(0, 1fr) minmax(0, auto); }
+:host(.sp-embedded) .row input:not([type="checkbox"]):not([type="color"]),
+:host(.sp-embedded) .row select, :host(.sp-embedded) .row textarea { max-width: min(200px, 54vw); min-width: 0; font-size: 16px; }
+:host(.sp-embedded) .row .key { overflow-wrap: anywhere; }
+:host(.sp-embedded) .sp-body { overflow-x: hidden; }
+@media (max-width: 520px) {
+  .settings-panel { width: 100%; flex-basis: auto; }
+  .settings-panel .row { grid-template-columns: minmax(0, 1fr); grid-template-areas: "lbl" "widget" "key"; }
+  .settings-panel .row .badge { justify-self: start; }
+  .settings-panel .row .inputwrap, .settings-panel .row > select,
+  .settings-panel .row > input, .settings-panel .row > textarea,
+  .settings-panel .row > .pts, .settings-panel .row > .muted { justify-self: stretch; }
+  .settings-panel .row input:not([type="checkbox"]):not([type="color"]),
+  .settings-panel .row select, .settings-panel .row textarea { max-width: 100%; min-width: 0; font-size: 16px; }
+}
 
 /* ---- BedShapeEditor (printable_area custom widget) ---- */
 .bse { display: flex; flex-direction: column; gap: 6px; min-width: 0; max-width: 220px; }

@@ -83,12 +83,10 @@ export default function Viewport({
   const appBodyRef = useRef(null)
   const layout = useResponsiveLayout(shellRef)
   const responsiveUI = useResponsiveUI(layout, appBodyRef)
-  const { inspectorOpen, setInspectorOpen, expandedInspectorOpen, setExpandedInspectorOpen,
+  const { compact, intermediate, inspectorOpen, setInspectorOpen, expandedInspectorOpen, setExpandedInspectorOpen,
     requestSheetSnap, stepSheet, returnToScene,
     effectiveSnap, sheetStyle, inspectorOpenButtonRef, inspectorDialogRef, actionSurfaceRef, onModalKeyDown, openInspector,
     beginSheetDrag, moveSheetDrag, finishSheetDrag, cancelSheetDrag, handleSheetClick } = responsiveUI
-  const compact = layout.variant === 'compact'
-  const intermediate = layout.variant === 'intermediate'
   // Two frames, one derivation (core/plate_settings.js plateContext): `globalFrame` is the GLOBAL map's own —
   //  what is laid out once (the uniform grid cell, a project import's fallback bed, the 3mf stride, the global
   //  bed inputs); `ctx` (assigned below the state block — it needs selectedPlate; showPanel closes over `tech`)

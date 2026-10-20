@@ -133,6 +133,7 @@ export function useResponsiveUI(layout, appBodyRef) {
   }
 
   return {
+    compact: layout.variant === 'compact', intermediate: layout.variant === 'intermediate',
     inspectorOpen, setInspectorOpen, expandedInspectorOpen, setExpandedInspectorOpen,
     sheetSnap, requestSheetSnap, stepSheet, returnToScene, effectiveSnap, sheetStyle, dragging: dragSheetHeight != null,
     inspectorOpenButtonRef, inspectorDialogRef, actionSurfaceRef, onModalKeyDown, openInspector,

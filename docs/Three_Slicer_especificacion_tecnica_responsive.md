@@ -21,6 +21,15 @@ Estado: **implementación parcial; estructura responsive verificada localmente, 
 
 Evidencias de ejecución, incluidos fallos y reintentos: `TEST_LOG.md` local. Capturas de revisión: `/tmp/opencode/three-slicer-responsive-phone-390.png`, `/tmp/opencode/three-slicer-responsive-tablet-768.png` y `/tmp/opencode/three-slicer-responsive-tablet-1024.png` (temporales, no incluidas en Git).
 
+## Registro de ejecución — 21 de octubre de 2026 — Fase 3 (en curso)
+
+- [x] Conectar `processPanel` desde la aplicación y añadir al inspector los cuatro controles rápidos FFF respaldados por el esquema (`layer_height`, `sparse_infill_density`, `wall_loops`, `enable_support`). Se usa el mismo mapa efectivo, setter y ámbito Global/Placa del `ProcessCard`; los controles rápidos FFF no aparecen para SLA.
+- [x] Añadir borradores locales para los controles numéricos rápidos, confirmación por Enter/salida y rechazo accesible de borradores inválidos. La prueba del helper confirma que `0,20` y `0.20` equivalen; en navegador, `0,21` se reflejó como `0.21` tanto en Rápido como en Avanzado, y `-1` no modificó Avanzado.
+- [x] Corregir la presentación de porcentajes y los objetivos táctiles de los controles de Ajustes Avanzados revisados en la integración. En Chrome/CDP a 390×844, Rápido y Avanzado mostraron `15` con unidad `%`, los campos revisados midieron 48 px, el checkbox avanzado tuvo un área de 48×48 px y no hubo desbordamiento horizontal; permaneció una sola instancia de canvas.
+- [ ] La validación de todos los controles numéricos de Avanzado sigue pendiente. El esquema incluye tipos de unión/vector y límites simbólicos; no convertir vectores a escalares ni asumir que su índice cero corresponde a un extrusor. Los campos sin semántica de escritura segura deben seguir pendientes o no editables hasta definir su propietario.
+- [ ] El editor numérico de transformación sigue pendiente de una operación atómica del controlador y pruebas de historial/encuadre. Por decisión del usuario se conserva el autoasiento: no ofrecer altura Z física editable que el motor volvería a sobrescribir; limitar inicialmente a un objeto y aplazar semántica numérica de selección múltiple.
+- [ ] Estos avances parciales **no** completan por sí solos los criterios globales de ajustes, gestos táctiles, resultados/accesibilidad ni dispositivos reales. La matriz Android Chrome/iPadOS/Safari y moto g73 no se ha probado físicamente. Las verificaciones y fallos iniciales permanecen en `TEST_LOG.md`.
+
 ## 1. Resultado que debe producir la implementación
 
 Adaptar la interfaz de Three Slicer para preparar modelos, configurar el proceso, laminar y examinar el resultado mediante pantalla táctil. El visor 3D será el área principal. En móvil, los ajustes ocuparán un panel inferior regulable; en tablet ancha, un inspector lateral plegable. Ambos compartirán proyecto, selección, cámara y configuración.

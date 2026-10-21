@@ -64,29 +64,33 @@ function widgetFor(def) {
 }
 function ModeBadge({ mode }) { return <span className={`badge mode-${mode ?? 'none'}`}>{mode ?? '—'}</span> }
 
-function EditableWidget({ def, optKey, settings, setSettings, disabled, customWidgets }) {
+function EditableWidget({ def, optKey, label, settings, setSettings, disabled, customWidgets }) {
   const raw = settingRaw(settings, optKey)
   const set = v => setSettings(s => ({ ...s, [optKey]: v }))
   const Custom = customWidgets?.[optKey] ?? CUSTOM_WIDGETS[optKey]
   if (Custom) return <Custom def={def} value={raw} onChange={set} disabled={disabled} />
   const kind = widgetFor(def)
   const scalar = Array.isArray(raw) ? raw[0] : raw
+  const displayedScalar = def?.type === 'coPercent' && typeof scalar === 'string'
+    ? scalar.replace(/\s*%$/, '') : scalar
   switch (kind) {
     case 'select':
-      return (<select value={scalar ?? ''} onChange={e => set(e.target.value)} disabled={disabled}>
+      return (<select aria-label={label} value={scalar ?? ''} onChange={e => set(e.target.value)} disabled={disabled}>
         {def.enum_values.map((v, i) => <option key={v} value={v}>{def.enum_labels?.[i] ?? v}</option>)}
       </select>)
     case 'checkbox':
-      return <input type="checkbox" checked={Array.isArray(raw) ? !!raw[0] : !!raw} onChange={e => set(e.target.checked)} disabled={disabled} />
+      return <label className="check-hit"><input type="checkbox" aria-label={label} checked={Array.isArray(raw) ? !!raw[0] : !!raw}
+        onChange={e => set(e.target.checked)} disabled={disabled} /></label>
     case 'color':
-      return <input type="color" value={typeof scalar === 'string' && scalar.startsWith('#') ? scalar : UNKNOWN_COLOR} onChange={e => set(e.target.value)} disabled={disabled} />
+      return <input type="color" aria-label={label} value={typeof scalar === 'string' && scalar.startsWith('#') ? scalar : UNKNOWN_COLOR}
+        onChange={e => set(e.target.value)} disabled={disabled} />
     case 'textarea': {
       // full_width is how the schema marks the custom G-code templates, which run to hundreds of lines (issue 63).
       let rows = 2
       if (def.full_width) rows = 12
       let text = raw ?? ''
       if (Array.isArray(raw)) text = raw.join('\n')
-      return <textarea rows={rows} value={text} onChange={e => set(e.target.value)} disabled={disabled} />
+      return <textarea aria-label={label} rows={rows} value={text} onChange={e => set(e.target.value)} disabled={disabled} />
     }
     case 'points':
       return <code className="pts">{JSON.stringify(raw ?? [])}</code>
@@ -94,7 +98,7 @@ function EditableWidget({ def, optKey, settings, setSettings, disabled, customWi
       return <span className="muted">No schema</span>
     default:
       return (<span className="inputwrap">
-        <input value={scalar ?? ''} onChange={e => set(e.target.value)} disabled={disabled} />
+        <input aria-label={label} value={displayedScalar ?? ''} onChange={e => set(e.target.value)} disabled={disabled} />
         {def.sidetext && <span className="unit">{def.sidetext}</span>}
       </span>)
   }
@@ -112,7 +116,7 @@ function EditableOptionRow({ schema, optKey, settings, setSettings, disabled, on
     <div className={'row' + (off ? ' disabled' : '')} title={off ? `Disabled when: ${cond}` : (def?.tooltip ?? '')} data-testid={`row-${optKey}`}>
       <span className="lbl-cell">
         {overridden && <button type="button" className="override-dot" onClick={() => onRevertKey?.(optKey)}
-          title="This plate's override — click to follow the global value again" data-testid={`override-${optKey}`} />}
+          aria-label={`Use global value for ${label}`} title="This plate's override — click to follow the global value again" data-testid={`override-${optKey}`} />}
         {dirty && <span className="dirty-dot" title="Changed from default" data-testid={`dirty-${optKey}`} />}
         {onOptionOpen
           ? <button type="button" className="lbl lbl-link" onClick={() => onOptionOpen(optKey)} title="Details">{label}</button>
@@ -121,8 +125,8 @@ function EditableOptionRow({ schema, optKey, settings, setSettings, disabled, on
       <code className="key">{optKey}</code>
       <ModeBadge mode={def?.mode} />
       <span className="widget-cell">
-        <EditableWidget def={def} optKey={optKey} settings={settings} setSettings={setSettings} disabled={off} customWidgets={customWidgets} />
-        {dirty && <button className="reset-btn" onClick={reset} title="Reset to default" data-testid={`reset-${optKey}`}>↺</button>}
+        <EditableWidget def={def} optKey={optKey} label={label} settings={settings} setSettings={setSettings} disabled={off} customWidgets={customWidgets} />
+        {dirty && <button className="reset-btn" onClick={reset} title="Reset to default" aria-label={`Reset ${label} to default`} data-testid={`reset-${optKey}`}>↺</button>}
       </span>
     </div>
   )

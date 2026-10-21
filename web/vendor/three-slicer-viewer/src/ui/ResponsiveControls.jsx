@@ -1,4 +1,5 @@
 import React from 'react'
+import ProcessCard from './ProcessCard.jsx'
 
 export function SheetControls({ snap, onStep, onReturn, onDown, onMove, onUp, onCancel, onLostCapture, onHandleClick }) {
   return <div className="sheet-controls">
@@ -42,6 +43,12 @@ export function ExpandedInspectorActions({ open, onOpen, children }) {
     {!open && <button className="inspector-reopen" onClick={onOpen}>Open inspector</button>}
     <div className="expanded-action-surface">{children}</div>
   </>
+}
+
+export function ProcessSettingsCard({ visible, panels, ...props }) {
+  if (!visible) return null
+  const card = <ProcessCard {...props} />
+  return panels?.processCard === 'readonly' ? <div className="vp-readonly" inert="">{card}</div> : card
 }
 
 export function ResponsiveInert({ visible = true, intermediate, inspectorOpen, children }) {

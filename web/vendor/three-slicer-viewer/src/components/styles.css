@@ -30,12 +30,15 @@
 .lbl-cell .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dirty-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--_warn); box-shadow: 0 0 0 2px var(--_warn-soft); }
 /* Per-plate override marker: this value is the PLATE's, not the global one; clicking follows global again. */
-.override-dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; background: var(--_warn); border: 0; padding: 0;
-  cursor: pointer; box-shadow: 0 0 0 2px var(--_warn-soft); }
-.override-dot:hover { background: var(--_warn-ink); }
+.override-dot { position: relative; display: grid; place-items: center; flex: 0 0 48px; width: 48px; height: 48px; border-radius: 6px; background: transparent; border: 0; padding: 0;
+  cursor: pointer; }
+.override-dot::after { content: ''; width: 9px; height: 9px; border-radius: 50%; background: var(--_warn); box-shadow: 0 0 0 2px var(--_warn-soft); }
+.override-dot:hover::after { background: var(--_warn-ink); }
 .widget-cell { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.reset-btn { flex: 0 0 auto; border: 1px solid var(--_warn-border); background: var(--_warn-soft); color: var(--_warn-ink);
-  border-radius: 5px; cursor: pointer; font-size: 13px; line-height: 1; padding: 1px 5px; }
+.settings-panel .row { min-width: 0; }
+.settings-panel .row .widget-cell { flex-wrap: wrap; }
+.reset-btn { flex: 0 0 48px; min-width: 48px; min-height: 48px; border: 1px solid var(--_warn-border); background: var(--_warn-soft); color: var(--_warn-ink);
+  border-radius: 5px; cursor: pointer; font-size: 16px; line-height: 1; padding: 1px 5px; }
 .reset-btn:hover { background: var(--_warn-soft-hover); }
 
 /* ---- Panel shell ---- */
@@ -44,14 +47,14 @@
   font: 14px/1.5 -apple-system, "Segoe UI", sans-serif; }
 .settings-panel .sp-top { padding: 10px 12px 8px; border-bottom: 1px solid var(--_light-divider); }
 .sp-builder { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--_light-text-muted); }
-.sp-builder select { flex: 1; padding: 4px 6px; }
+.sp-builder select { flex: 1; min-width: 0; min-height: 48px; padding: 4px 6px; font-size: 16px; }
 .sp-pages { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
 .sp-pages button { border: 1px solid var(--_light-border); background: var(--_light-subtle); border-radius: 6px;
-  padding: 4px 8px; font-size: 12px; cursor: pointer; }
+  min-height: 48px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
 .sp-pages button.on { background: var(--_accent-soft); color: var(--_accent-ink); border-color: var(--_accent-soft-border); font-weight: 700; }
-.sp-modes { display: flex; gap: 4px; margin-top: 8px; }
+.sp-modes { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
 .sp-modes button { border: 0; background: none; font-size: 11px; color: var(--_light-text-faint);
-  padding: 2px 6px; border-radius: 6px; cursor: pointer; }
+  min-height: 48px; padding: 2px 8px; border-radius: 6px; cursor: pointer; }
 .sp-modes button.on { background: var(--_accent-soft); color: var(--_accent-ink); font-weight: 700; }
 .settings-panel .sp-body { flex: 1 1 auto; overflow-y: auto; padding: 8px 14px 24px; }
 .settings-panel .sp-body h2 { font-size: 16px; }
@@ -68,7 +71,7 @@
 .settings-panel .row input:not([type="checkbox"]):not([type="color"]),
 .settings-panel .row select, .settings-panel .row textarea { max-width: 200px; }
 .settings-panel .row.custom { grid-template-columns: 1fr; grid-template-areas: "lbl"; }
-.sp-search { width: 100%; box-sizing: border-box; padding: 6px 9px; border: 1px solid var(--_light-border); border-radius: 6px; font-size: 13px; margin-bottom: 8px; }
+.sp-search { width: 100%; min-width: 0; min-height: 48px; box-sizing: border-box; padding: 6px 9px; border: 1px solid var(--_light-border); border-radius: 6px; font-size: 16px; margin-bottom: 8px; }
 
 /* ---- Embedded variant (sp-embedded on :host — full width inside cards such as the viewer process-card) ---- */
 :host(.sp-embedded) .settings-panel { position: static; width: auto; flex: none; border: 0; height: auto; }
@@ -76,7 +79,7 @@
 :host(.sp-embedded) .settings-panel { min-width: 0; }
 :host(.sp-embedded) .sp-top { padding: 8px; }
 :host(.sp-embedded) .sp-builder { flex-wrap: wrap; }
-:host(.sp-embedded) .sp-pages button, :host(.sp-embedded) .sp-modes button { min-height: 40px; }
+:host(.sp-embedded) .sp-pages button, :host(.sp-embedded) .sp-modes button { min-height: 48px; }
 :host(.sp-embedded) .row { grid-template-columns: minmax(0, 1fr) minmax(0, auto); }
 :host(.sp-embedded) .row input:not([type="checkbox"]):not([type="color"]),
 :host(.sp-embedded) .row select, :host(.sp-embedded) .row textarea { max-width: min(200px, 54vw); min-width: 0; font-size: 16px; }
@@ -89,9 +92,17 @@
   .settings-panel .row .inputwrap, .settings-panel .row > select,
   .settings-panel .row > input, .settings-panel .row > textarea,
   .settings-panel .row > .pts, .settings-panel .row > .muted { justify-self: stretch; }
-  .settings-panel .row input:not([type="checkbox"]):not([type="color"]),
-  .settings-panel .row select, .settings-panel .row textarea { max-width: 100%; min-width: 0; font-size: 16px; }
+.settings-panel .row input:not([type="checkbox"]):not([type="color"]),
+.settings-panel .row select, .settings-panel .row textarea { max-width: 100%; min-width: 0; font-size: 16px; }
 }
+
+/* Schema widgets keep a compact visual style but expose full-size, readable touch controls. */
+.settings-panel .row input:not([type="checkbox"]):not([type="color"]),
+.settings-panel .row select, .settings-panel .row textarea { min-width: 0; min-height: 48px; font-size: 16px; }
+.settings-panel .row input[type="color"] { flex: 0 0 48px; width: 48px; height: 48px; min-height: 48px; padding: 4px; }
+.check-hit { display: grid; flex: 0 0 48px; place-items: center; width: 48px; height: 48px; border-radius: 6px; cursor: pointer; }
+.check-hit input { width: 20px; height: 20px; margin: 0; accent-color: var(--_accent-ink); }
+.check-hit:focus-within { outline: 2px solid var(--_accent-ink); outline-offset: 2px; }
 
 /* ---- BedShapeEditor (printable_area custom widget) ---- */
 .bse { display: flex; flex-direction: column; gap: 6px; min-width: 0; max-width: 220px; }

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import Viewport, { useSlicer } from 'three-slicer/viewer'
+import ProcessSettings from './ProcessSettings.jsx'
 import {
   applyPreset,
   printerSettings,
@@ -131,6 +132,8 @@ function App() {
       <div className="viewport-frame"><Viewport
         settings={settings}
         setSettings={setSettings}
+        processPanel={(effectiveSettings, scopedSetSettings, scopeMeta) => <ProcessSettings
+          settings={effectiveSettings} setSettings={scopedSetSettings} scopeMeta={scopeMeta} />}
         defaultAutoSlice={false}
         slicer={useSlicer}
         sliceRequest={sliceRequest || null}

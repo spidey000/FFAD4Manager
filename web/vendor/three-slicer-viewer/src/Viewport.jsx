@@ -34,11 +34,11 @@ import { makeSupportSettings } from './core/support_settings.js'
 import { objectRows } from './core/object_rows.js'
 import {
   TopBar, VersionBadge, GizmoRail, ObjectToolbar, ContextMenu, HelpOverlay, PaintPanel, MaterialPaintPanel, PlateBar,
-  PreviewControls, StatsCard, PrinterCard, ProcessCard, FilamentCard, ResinCard, ObjectList, SliceBar, SliceError, TowerCard, writeTowerPosition,
+  PreviewControls, StatsCard, PrinterCard, FilamentCard, ResinCard, ObjectList, SliceBar, SliceError, TowerCard, writeTowerPosition,
 } from './ui/index.js'
 import { DEFAULT_BED, DEFAULT_LINE_WIDTH } from './core/viewer_defaults.js'
 import { THEME_CSS } from './core/theme.js'
-import { InspectorControls, ResponsiveActionSurfaces, ResponsiveInert, ResponsiveNavigation } from './ui/ResponsiveControls.jsx'
+import { InspectorControls, ProcessSettingsCard, ResponsiveActionSurfaces, ResponsiveInert, ResponsiveNavigation } from './ui/ResponsiveControls.jsx'
 
 // 3D viewport + browser-only slicing (WASM, track C stage 4).
 //  - Slice parameters are derived from the right-hand editor panel values (deriveKernelParams) — no duplicate form.
@@ -818,6 +818,9 @@ export default function Viewport({
                 </Panel>
               )}
 
+              <ProcessSettingsCard visible={showPanel('processCard')} panels={panels} processPanel={processPanel}
+                settings={settings} setSettings={setSettings} {...scopeProps} />
+
               {showPanel('filamentCard') && (
                 <Panel panels={panels} name="filamentCard">
                   <FilamentCard catalog={catalogProp} colors={extruderColors} onColor={setExtColor} onAdd={addFilament} onRemove={removeFilament}
@@ -878,12 +881,6 @@ export default function Viewport({
                 </Panel>
 )}
 
-              {/* (3) Process (settings panel) — ProcessCard.jsx holds the per-plate scope toggle/projection. */}
-              {showPanel('processCard') && (
-                <Panel panels={panels} name="processCard">
-                <ProcessCard processPanel={processPanel} settings={settings} setSettings={setSettings} {...scopeProps} />
-                </Panel>
-)}
             </div>
 
             {showPanel('sliceBar') && layout.variant === 'intermediate' && sliceAction}

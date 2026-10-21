@@ -4,8 +4,12 @@ import http.client
 import json
 import subprocess
 import threading
+import time
+from types import SimpleNamespace
 
 import pytest
+import jwt
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 from ffadv4manager import slicer_bridge
 
@@ -73,9 +77,38 @@ def test_slicer_server_defaults_to_loopback_and_web_dist(tmp_path, monkeypatch):
 
     monkeypatch.setattr(slicer_bridge, "ThreadingHTTPServer", FakeServer)
     monkeypatch.setattr(slicer_bridge.webbrowser, "open", lambda url: seen.update(url=url))
+    monkeypatch.setattr(slicer_bridge, "load_access_config", lambda required=False: None)
     slicer_bridge.serve(tmp_path)
     assert seen["address"] == ("127.0.0.1", slicer_bridge.PORT)
     assert seen["url"] == "http://127.0.0.1:45678/"
+    assert seen["closed"] is True
+
+
+def test_slicer_server_access_mode_reports_public_url_without_opening_browser(tmp_path, monkeypatch, capsys):
+    index = tmp_path / "index.html"
+    index.write_text(f"<script>{slicer_bridge.TOKEN_PLACEHOLDER}</script>")
+    seen = {}
+    config = {"public_origin": "https://print.example.com", "jwks_url": "https://team.example.com/certs"}
+
+    class FakeServer:
+        server_port = 45678
+
+        def __init__(self, address, handler):
+            seen.update(address=address, handler=handler)
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            seen["closed"] = True
+
+    monkeypatch.setattr(slicer_bridge, "ThreadingHTTPServer", FakeServer)
+    monkeypatch.setattr(slicer_bridge, "load_access_config", lambda required=False: config)
+    monkeypatch.setattr(slicer_bridge.webbrowser, "open", lambda url: seen.update(opened=url))
+    slicer_bridge.serve(tmp_path)
+    assert seen["address"] == ("127.0.0.1", slicer_bridge.PORT)
+    assert "opened" not in seen
+    assert "Three_Slicer public UI: https://print.example.com" in capsys.readouterr().out
     assert seen["closed"] is True
 
 
@@ -85,7 +118,7 @@ def test_missing_ui_build_has_actionable_error(tmp_path):
 
 
 @pytest.fixture
-def http_bridge(tmp_path):
+def http_bridge(tmp_path, access_config=None):
     calls = []
 
     def upload(gcode, remote_name, start):
@@ -94,7 +127,7 @@ def http_bridge(tmp_path):
 
     server = ThreadingHTTPServer(
         ("127.0.0.1", 0),
-        slicer_bridge.make_handler(tmp_path, "test-secret-token", upload),
+        slicer_bridge.make_handler(tmp_path, "test-secret-token", upload, access_config=access_config),
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -106,13 +139,17 @@ def http_bridge(tmp_path):
         thread.join()
 
 
-def post_print(port, *, origin="correct", host="correct", token="correct", content_type="application/json", payload=None):
+def post_print(port, *, origin="correct", host="correct", token="correct", assertion=None, content_type="application/json", payload=None):
     authority = f"127.0.0.1:{port}"
     headers = {"Content-Type": content_type, "Authorization": "Bearer test-secret-token"}
+    if assertion is not None:
+        headers["Cf-Access-Jwt-Assertion"] = assertion
     if origin == "correct":
         headers["Origin"] = f"http://{authority}"
     elif origin == "wrong":
         headers["Origin"] = "http://example.com"
+    elif origin == "public":
+        headers["Origin"] = "https://print.example.com"
     if host == "correct":
         headers["Host"] = authority
     elif host == "wrong":
@@ -120,6 +157,8 @@ def post_print(port, *, origin="correct", host="correct", token="correct", conte
     elif host == "missing":
         # http.client otherwise supplies its own Host header automatically.
         headers["Host"] = ""
+    elif host == "public":
+        headers["Host"] = "print.example.com"
     if token == "missing":
         headers.pop("Authorization")
     elif token == "wrong":
@@ -171,6 +210,189 @@ def test_http_explicit_start_true_passes_start_to_mock_upload(http_bridge):
     assert result["success"] is True
     assert result["message"] == "Upload completed; print-start command acknowledged; physical printing not verified"
     assert calls == [("G1 X1", "safe.gcode", True)]
+
+
+def test_access_assertion_required_and_verified_before_upload(monkeypatch):
+    config = {
+        "issuer": "https://team.example.com", "jwks_url": "https://team.example.com/cdn-cgi/access/certs",
+        "audience": "fixed-audience", "email": "allowed@example.com",
+        "public_origin": "https://print.example.com", "public_host": "print.example.com",
+    }
+    calls = []
+    def upload(gcode, remote_name, start):
+        calls.append((gcode, remote_name, start))
+        return subprocess.CompletedProcess([], 0, "ok", "")
+    monkeypatch.setattr(slicer_bridge.jwt, "PyJWKClient", lambda *args, **kwargs: object())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), slicer_bridge.make_handler(Path("."), "test-secret-token", upload, access_config=config))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_port
+    try:
+        outcomes = {"good": True, "bad": False, "wrong-email": False}
+        seen = []
+        def verify(assertion, actual_config, jwks_client):
+            seen.append((assertion, actual_config))
+            return outcomes.get(assertion, False)
+        monkeypatch.setattr(slicer_bridge, "verify_access_assertion", verify)
+        assert post_print(port)[0] == 401
+        assert post_print(port, assertion="bad")[0] == 401
+        assert post_print(port, assertion="wrong-email")[0] == 401
+        assert calls == []
+        assert post_print(port, assertion="good")[0] == 200
+        assert calls == [("G1 X1", "safe.gcode", False)]
+        assert [item[0] for item in seen] == ["bad", "wrong-email", "good"]
+        assert all(item[1] is config for item in seen)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_access_configuration_is_all_or_nothing():
+    with pytest.raises(RuntimeError, match="must set all"):
+        slicer_bridge.load_access_config({"CF_ACCESS_TEAM_DOMAIN": "team.example.com"})
+    assert slicer_bridge.load_access_config({}) is None
+    with pytest.raises(RuntimeError, match="Cloudflare Access is required"):
+        slicer_bridge.load_access_config({}, required=True)
+
+
+def test_require_access_prevents_startup_without_configuration(tmp_path, monkeypatch):
+    index = tmp_path / "index.html"
+    index.write_text(f"<script>{slicer_bridge.TOKEN_PLACEHOLDER}</script>")
+    load_access_config = slicer_bridge.load_access_config
+    monkeypatch.setattr(slicer_bridge, "load_access_config", lambda required=False: load_access_config({}, required=required))
+    with pytest.raises(RuntimeError, match="Cloudflare Access is required"):
+        slicer_bridge.serve(tmp_path, require_access=True)
+
+
+@pytest.fixture
+def generated_access_key(monkeypatch):
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_key = private_key.public_key()
+
+    class LocalJwksClient:
+        instances = []
+        def __init__(self, url, **kwargs):
+            self.url, self.kwargs = url, kwargs
+            self.calls = 0
+            self.instances.append(self)
+        def get_signing_key_from_jwt(self, assertion):
+            self.calls += 1
+            return SimpleNamespace(key=public_key)
+
+    monkeypatch.setattr(slicer_bridge.jwt, "PyJWKClient", LocalJwksClient)
+    config = {
+        "issuer": "https://team.example.com", "jwks_url": "https://team.example.com/cdn-cgi/access/certs",
+        "audience": "fixed-audience", "email": "allowed@example.com",
+        "public_origin": "https://print.example.com", "public_host": "print.example.com",
+    }
+
+    def token(**overrides):
+        claims = {"iss": config["issuer"], "aud": config["audience"], "exp": int(time.time()) + 300,
+                  "email": config["email"]}
+        claims.update(overrides)
+        return jwt.encode(claims, private_key, algorithm="RS256", headers={"kid": "local-key"})
+
+    return config, private_key, token, LocalJwksClient
+
+
+def _get(port, host, *, origin=None, assertion=None, path="/"):
+    headers = {"Host": host}
+    if origin is not None:
+        headers["Origin"] = origin
+    if assertion is not None:
+        headers["Cf-Access-Jwt-Assertion"] = assertion
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+    connection.request("GET", path, headers=headers)
+    response = connection.getresponse()
+    result = response.status, dict(response.getheaders()), response.read()
+    connection.close()
+    return result
+
+
+def test_public_get_requires_access_assertion_with_optional_exact_origin(tmp_path, generated_access_key):
+    config, _, token, _ = generated_access_key
+    (tmp_path / "index.html").write_text(f"<script>{slicer_bridge.TOKEN_PLACEHOLDER}</script>")
+    (tmp_path / "asset.js").write_text("ok")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), slicer_bridge.make_handler(tmp_path, "ephemeral-token", access_config=config))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_port
+        assert _get(port, config["public_host"])[0] == 401
+        assert _get(port, config["public_host"], assertion=token(), origin="https://wrong.example")[0] == 403
+        status, headers, body = _get(port, config["public_host"], assertion=token())
+        assert status == 200 and b"ephemeral-token" in body
+        assert headers["Cache-Control"] == "no-store"
+        assert _get(port, config["public_host"], assertion=token(), origin=config["public_origin"], path="/asset.js")[0] == 200
+        assert _get(port, "evil.example", assertion=token())[0] == 403
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+@pytest.mark.parametrize("kind", ["expired", "issuer", "audience", "signature", "email"])
+def test_crypto_assertion_failures_never_call_upload_or_start(tmp_path, generated_access_key, kind):
+    config, private_key, token, _ = generated_access_key
+    calls = []
+    def upload(*args):
+        calls.append(args)
+        return subprocess.CompletedProcess([], 0, "ok", "")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), slicer_bridge.make_handler(tmp_path, "test-secret-token", upload, access_config=config))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        if kind == "expired":
+            assertion = token(exp=int(time.time()) - 10)
+        elif kind == "issuer":
+            assertion = token(iss="https://wrong.example")
+        elif kind == "audience":
+            assertion = token(aud="wrong-audience")
+        elif kind == "signature":
+            other_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            assertion = jwt.encode({"iss": config["issuer"], "aud": config["audience"], "exp": int(time.time()) + 300,
+                                   "email": config["email"]}, other_key, algorithm="RS256", headers={"kid": "other"})
+        else:
+            assertion = token(email="other@example.com")
+        status, _ = post_print(server.server_port, assertion=assertion,
+                               payload=b'{"filename":"safe.gcode","gcode":"G1 X1","start":true}')
+        assert status == 401
+        assert calls == []
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_access_upload_start_uses_cached_jwks_client_test_double(tmp_path, generated_access_key):
+    config, _, token, client_class = generated_access_key
+    calls = []
+    def upload(*args):
+        calls.append(args)
+        return subprocess.CompletedProcess([], 0, "ok", "")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), slicer_bridge.make_handler(tmp_path, "test-secret-token", upload, access_config=config))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, _ = post_print(server.server_port, host="public", origin="wrong", assertion=token(),
+                               payload=b'{"filename":"safe.gcode","gcode":"G1 X1","start":true}')
+        assert status == 403 and calls == []
+        status, _ = post_print(server.server_port, host="public", origin="public", assertion=token(),
+                               payload=b'{"filename":"safe.gcode","gcode":"G1 X1","start":true}')
+        assert status == 200
+        assert calls == [("G1 X1", "safe.gcode", True)]
+        assert len(client_class.instances) == 1
+        client = client_class.instances[0]
+        assert client.kwargs == {
+            "cache_jwk_set": True, "cache_keys": True, "lifespan": 300,
+            "timeout": 5, "max_cached_keys": 16,
+        }
+        assert client.calls == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 def test_http_accepts_gcode_larger_than_previous_limit(http_bridge):

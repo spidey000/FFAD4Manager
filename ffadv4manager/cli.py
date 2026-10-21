@@ -293,7 +293,14 @@ def main(argv: list[str] | None = None) -> int:
     profile_delete = profiles_sub.add_parser("delete")
     profile_delete.add_argument("name")
 
-    sub.add_parser("slicer", help="Start the loopback-only local Three_Slicer UI")
+    slicer_cmd = sub.add_parser(
+        "slicer", help="Start the loopback Three_Slicer bridge (local or Access-protected)"
+    )
+    slicer_cmd.add_argument(
+        "--require-access",
+        action="store_true",
+        help="Refuse startup unless complete Cloudflare Access settings are configured",
+    )
 
     config_cmd = sub.add_parser("config", help="View or edit stored connection defaults")
     config_sub = config_cmd.add_subparsers(dest="config_action", required=True)
@@ -325,7 +332,7 @@ def main(argv: list[str] | None = None) -> int:
         from ffadv4manager.slicer_bridge import serve
 
         try:
-            serve()
+            serve(require_access=args.require_access)
             return 0
         except Exception as exc:  # noqa: BLE001
             print(f"Error: {exc}", file=sys.stderr)

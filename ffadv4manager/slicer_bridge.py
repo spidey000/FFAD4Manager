@@ -1,4 +1,4 @@
-"""Loopback-only HTTP bridge for the local Three_Slicer UI."""
+"""Loopback-bound HTTP bridge for local or Cloudflare Access-protected UI use."""
 
 from __future__ import annotations
 
@@ -14,6 +14,9 @@ import sys
 import tempfile
 import threading
 import webbrowser
+from urllib.parse import urlsplit
+
+import jwt
 
 HOST = "127.0.0.1"
 PORT = 8765
@@ -22,6 +25,50 @@ TOKEN_PLACEHOLDER = "__FFADV4MANAGER_TOKEN__"
 MAX_BODY = 64 * 1024 * 1024
 BODY_READ_TIMEOUT = 15
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.gcode$", re.IGNORECASE)
+_ACCESS_ENV = ("CF_ACCESS_TEAM_DOMAIN", "CF_ACCESS_AUD", "CF_ACCESS_EMAIL", "CF_ACCESS_PUBLIC_ORIGIN")
+
+
+def load_access_config(environ=None, *, required=False):
+    """Load complete Cloudflare Access configuration, or preserve local-only mode."""
+    environ = os.environ if environ is None else environ
+    values = [environ.get(name, "").strip() for name in _ACCESS_ENV]
+    if not any(values):
+        if required:
+            raise RuntimeError("Cloudflare Access is required; set all: " + ", ".join(_ACCESS_ENV))
+        return None
+    if not all(values):
+        raise RuntimeError("Cloudflare Access configuration must set all: " + ", ".join(_ACCESS_ENV))
+    domain, audience, email, public_origin = values
+    if "/" in domain or ":" in domain or domain.startswith(".") or domain.endswith("."):
+        raise RuntimeError("CF_ACCESS_TEAM_DOMAIN must be a hostname without a scheme or path")
+    parsed = urlsplit(public_origin)
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+            or parsed.path or parsed.query or parsed.fragment or parsed.netloc != parsed.hostname):
+        raise RuntimeError("CF_ACCESS_PUBLIC_ORIGIN must be an exact https://hostname origin")
+    return {
+        "issuer": f"https://{domain}",
+        "jwks_url": f"https://{domain}/cdn-cgi/access/certs",
+        "audience": audience,
+        "email": email,
+        "public_origin": public_origin,
+        "public_host": parsed.hostname,
+    }
+
+
+def verify_access_assertion(assertion: str, config: dict, jwks_client) -> bool:
+    try:
+        signing_key = jwks_client.get_signing_key_from_jwt(assertion)
+        claims = jwt.decode(
+            assertion,
+            signing_key.key,
+            algorithms=["RS256"],
+            issuer=config["issuer"],
+            audience=config["audience"],
+            options={"require": ["exp"]},
+        )
+        return claims.get("email") == config["email"]
+    except Exception:
+        return False
 
 
 def safe_remote_name(filename: str) -> str:
@@ -72,7 +119,13 @@ def invoke_upload(gcode: str, remote_name: str, start: bool) -> subprocess.Compl
             pass
 
 
-def make_handler(web_root: Path, token: str, upload=invoke_upload):
+def make_handler(web_root: Path, token: str, upload=invoke_upload, access_config=None):
+    if access_config is None:
+        access_config = load_access_config()
+    jwks_client = jwt.PyJWKClient(
+        access_config["jwks_url"], cache_jwk_set=True, cache_keys=True, lifespan=300,
+        timeout=5, max_cached_keys=16,
+    ) if access_config else None
     busy = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
@@ -92,10 +145,27 @@ def make_handler(web_root: Path, token: str, upload=invoke_upload):
             self.wfile.write(data)
 
         def _authorized_origin(self) -> bool:
-            return self.headers.get("Host") == f"127.0.0.1:{self.server.server_port}" and self.headers.get("Origin") == f"http://127.0.0.1:{self.server.server_port}"
+            local_host = f"127.0.0.1:{self.server.server_port}"
+            local_origin = f"http://127.0.0.1:{self.server.server_port}"
+            host, origin = self.headers.get("Host"), self.headers.get("Origin")
+            return (host == local_host and origin == local_origin) or bool(
+                access_config and host == access_config["public_host"] and origin == access_config["public_origin"]
+            )
 
         def do_GET(self) -> None:
-            if not self._authorized_origin() and self.headers.get("Host") != f"127.0.0.1:{self.server.server_port}":
+            host = self.headers.get("Host")
+            local_host = f"127.0.0.1:{self.server.server_port}"
+            public_request = bool(access_config and host == access_config["public_host"])
+            if public_request:
+                origin = self.headers.get("Origin")
+                if origin is not None and origin != access_config["public_origin"]:
+                    self.send_error(403)
+                    return
+                assertion = self.headers.get("Cf-Access-Jwt-Assertion")
+                if not assertion or not verify_access_assertion(assertion, access_config, jwks_client):
+                    self.send_error(401)
+                    return
+            elif host != local_host:
                 self.send_error(403)
                 return
             if self.path == "/":
@@ -122,6 +192,8 @@ def make_handler(web_root: Path, token: str, upload=invoke_upload):
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("X-Content-Type-Options", "nosniff")
+            if relative == "index.html":
+                self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
 
@@ -138,6 +210,11 @@ def make_handler(web_root: Path, token: str, upload=invoke_upload):
             if self.headers.get("Authorization") != f"Bearer {token}":
                 self._json(401, {"success": False, "error": "Invalid bearer token"})
                 return
+            if access_config:
+                assertion = self.headers.get("Cf-Access-Jwt-Assertion")
+                if not assertion or not verify_access_assertion(assertion, access_config, jwks_client):
+                    self._json(401, {"success": False, "error": "Invalid Access assertion"})
+                    return
             try:
                 length = int(self.headers.get("Content-Length", ""))
             except ValueError:
@@ -178,7 +255,8 @@ def make_handler(web_root: Path, token: str, upload=invoke_upload):
     return Handler
 
 
-def serve(web_root: Path | None = None) -> None:
+def serve(web_root: Path | None = None, *, require_access=False) -> None:
+    access_config = load_access_config(required=require_access)
     root = (web_root or Path(__file__).resolve().parent.parent / "web" / "dist").resolve()
     index = root / "index.html"
     if not index.is_file():
@@ -186,10 +264,14 @@ def serve(web_root: Path | None = None) -> None:
     if index.read_text(encoding="utf-8").count(TOKEN_PLACEHOLDER) != 1:
         raise RuntimeError(f"{index} must contain exactly one {TOKEN_PLACEHOLDER} placeholder")
     token = secrets.token_urlsafe(32)
-    server = ThreadingHTTPServer((HOST, PORT), make_handler(root, token))
-    url = f"http://{HOST}:{server.server_port}/"
-    print(f"Three_Slicer local UI: {url}", flush=True)
-    webbrowser.open(url)
+    server = ThreadingHTTPServer((HOST, PORT), make_handler(root, token, access_config=access_config))
+    if access_config:
+        url = access_config["public_origin"]
+        print(f"Three_Slicer public UI: {url}", flush=True)
+    else:
+        url = f"http://{HOST}:{server.server_port}/"
+        print(f"Three_Slicer local UI: {url}", flush=True)
+        webbrowser.open(url)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

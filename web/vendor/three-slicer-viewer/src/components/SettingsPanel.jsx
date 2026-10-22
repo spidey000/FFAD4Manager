@@ -6,7 +6,7 @@
 //   setSettings  : (updater) => void   (React setState-style; the ONLY way state leaves the component)
 //   onOptionOpen : (optKey) => void    (optional; label click — deep-link/detail. Omit → plain labels,
 //                  which is what apps/independence-check does to prove zero router coupling.)
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import ShadowHost from './shadow_host.jsx'
 import shadowCss from './styles.css?inline'   // Shadow DOM isolation — inlined as a string at build time
 import BedShapeEditor from './BedShapeEditor.jsx'
@@ -22,6 +22,7 @@ import { settingRaw, printerTechnology } from 'three-slicer-viewer/settings'
 import { disabledKeys, makeCfg } from 'three-slicer-viewer/toggle'
 import { UNKNOWN_COLOR } from '../core/viewer_defaults.js'
 import { THEME_CSS } from '../core/theme.js'
+import { parseSchemaSettingDraft, schemaDraftSupport } from '../core/schema_setting_draft.js'
 
 const MODES = ['all', 'simple', 'advanced', 'expert', 'develop']
 const builderLabel = b => b.replace('::build', '').replace('Tab', '').replace('_sla', ' (SLA)')
@@ -64,13 +65,140 @@ function widgetFor(def) {
 }
 function ModeBadge({ mode }) { return <span className={`badge mode-${mode ?? 'none'}`}>{mode ?? '—'}</span> }
 
-function EditableWidget({ def, optKey, label, settings, setSettings, disabled, customWidgets }) {
+const DRAFT_TYPES = new Set(['coFloat', 'coInt', 'coPercent', 'coFloatOrPercent'])
+const UNOWNED_VECTOR_TYPES = new Set(['coFloats', 'coInts', 'coPercents', 'coBools', 'coEnums', 'coFloatsOrPercents', 'coStrings', 'coPoint', 'coPoints', 'coPointsGroups'])
+
+function displayScalarDraft(value, definition) {
+  if (value == null) return ''
+  if (definition?.type === 'coPercent' && typeof value === 'string') return value.replace(/\s*%$/, '')
+  return String(value)
+}
+
+function readOnlyValue(label, optKey, value, reason) {
+  let text = '—'
+  if (value != null) {
+    try { text = typeof value === 'string' ? value : JSON.stringify(value) } catch { text = String(value) }
+  }
+  const reasonId = reason ? `readonly-reason-${optKey}` : undefined
+  return <div className="schema-readonly" data-testid={`readonly-setting-${optKey}`}>
+    <output tabIndex={0} aria-label={`${label}, read only`} aria-describedby={reasonId} data-setting-key={optKey}>{text}</output>
+    {reason && <span className="schema-readonly-reason" id={reasonId} role="note">{reason}</span>}
+  </div>
+}
+
+function draftError(result, definition) {
+  const boundText = value => typeof value === 'string' ? value.trim().replace(/[fF]$/, '') : String(value)
+  if (result.reason === 'blank') return 'Enter a value.'
+  if (result.reason === 'integer_required') return 'Enter a whole number.'
+  if (result.reason === 'below_min') return `Enter at least ${boundText(definition.min)}.`
+  if (result.reason === 'above_max') return `Enter no more than ${boundText(definition.max)}.`
+  return 'Enter a valid number. Use a comma or point for decimals.'
+}
+
+function ScalarDraftWidget({ def, optKey, label, raw, settings, setSettings, disabled, draftContextKey }) {
+  const effectiveDraft = displayScalarDraft(raw, def)
+  const [draft, setDraft] = useState(effectiveDraft)
+  const [error, setError] = useState('')
+  const focused = useRef(false)
+  const invalid = useRef(false)
+  const externalConflict = useRef(false)
+  const pendingWrite = useRef(null)
+  const committed = useRef(effectiveDraft)
+  const lastObserved = useRef(effectiveDraft)
+  const errorId = `setting-draft-error-${draftContextKey}-${optKey}`
+
+  useEffect(() => {
+    if (effectiveDraft === lastObserved.current) return
+    lastObserved.current = effectiveDraft
+    if (pendingWrite.current !== null && effectiveDraft === pendingWrite.current) {
+      pendingWrite.current = null
+      committed.current = effectiveDraft
+      invalid.current = false
+      externalConflict.current = false
+      return
+    }
+    pendingWrite.current = null
+    if (focused.current) {
+      externalConflict.current = true
+      setError('This setting changed elsewhere. Your draft will be discarded.')
+      return
+    }
+    setDraft(effectiveDraft)
+    committed.current = effectiveDraft
+    invalid.current = false
+    externalConflict.current = false
+    setError('')
+  }, [effectiveDraft])
+
+  function commit() {
+    if (disabled) { discard(); return }
+    if (draft === committed.current && !externalConflict.current) return
+    if (externalConflict.current || effectiveDraft !== committed.current) {
+      discard()
+      setError('This setting changed elsewhere. Your draft was discarded.')
+      return
+    }
+    const parsed = parseSchemaSettingDraft(draft, def)
+    if (!parsed.valid) {
+      invalid.current = true
+      setError(draftError(parsed, def))
+      return
+    }
+    const normalizedDraft = displayScalarDraft(parsed.value, def)
+    invalid.current = false
+    externalConflict.current = false
+    committed.current = normalizedDraft
+    pendingWrite.current = normalizedDraft
+    setDraft(normalizedDraft)
+    setError('')
+    setSettings(current => ({ ...current, [optKey]: parsed.value }))
+  }
+
+  function discard() {
+    const current = displayScalarDraft(settingRaw(settings, optKey), def)
+    invalid.current = false
+    externalConflict.current = false
+    pendingWrite.current = null
+    lastObserved.current = current
+    committed.current = current
+    setDraft(current)
+    setError('')
+  }
+
+  return <span className="inputwrap schema-draft-wrap" data-testid={`setting-draft-${optKey}`}>
+    <input aria-label={label} inputMode={def.type === 'coInt' ? 'numeric' : 'decimal'} aria-invalid={invalid.current || undefined} aria-describedby={error ? errorId : undefined}
+      value={draft} disabled={disabled} data-setting-key={optKey} onFocus={() => { focused.current = true }}
+      onChange={event => {
+        setDraft(event.target.value)
+        if (invalid.current && !externalConflict.current) { invalid.current = false; setError('') }
+      }}
+      onKeyDown={event => {
+        if (event.key === 'Enter') { event.preventDefault(); commit() }
+        if (event.key === 'Escape') { event.preventDefault(); discard() }
+      }}
+      onBlur={() => { focused.current = false; commit() }} />
+    {def.sidetext && <span className="unit">{def.sidetext}</span>}
+    {error && <span className="schema-draft-error" id={errorId} role="alert" aria-live="polite">{error}</span>}
+  </span>
+}
+
+function EditableWidget({ def, optKey, label, settings, setSettings, disabled, customWidgets, draftContextKey }) {
   const raw = settingRaw(settings, optKey)
   const set = v => setSettings(s => ({ ...s, [optKey]: v }))
   const Custom = customWidgets?.[optKey] ?? CUSTOM_WIDGETS[optKey]
   if (Custom) return <Custom def={def} value={raw} onChange={set} disabled={disabled} />
+  if (UNOWNED_VECTOR_TYPES.has(def?.type)) return readOnlyValue(label, optKey, raw, 'Read only — vector editing is not available here.')
+  if (DRAFT_TYPES.has(def?.type)) {
+    if (Array.isArray(raw)) return readOnlyValue(label, optKey, raw, 'Read only — this value is stored as a vector.')
+    const support = schemaDraftSupport(def)
+    if (!support.supported) return readOnlyValue(label, optKey, raw, 'Read only — schema limits could not be resolved.')
+    return <ScalarDraftWidget key={`${draftContextKey}:${optKey}`} def={def} optKey={optKey} label={label} raw={raw}
+      settings={settings} setSettings={setSettings} disabled={disabled} draftContextKey={draftContextKey} />
+  }
   const kind = widgetFor(def)
-  const scalar = Array.isArray(raw) ? raw[0] : raw
+  if (kind === 'points') return <code className="pts">{JSON.stringify(raw ?? [])}</code>
+  if (Array.isArray(raw)) return readOnlyValue(label, optKey, raw, 'Read only — vector editing is not available here.')
+  const scalar = raw
   const displayedScalar = def?.type === 'coPercent' && typeof scalar === 'string'
     ? scalar.replace(/\s*%$/, '') : scalar
   switch (kind) {
@@ -92,8 +220,6 @@ function EditableWidget({ def, optKey, label, settings, setSettings, disabled, c
       if (Array.isArray(raw)) text = raw.join('\n')
       return <textarea aria-label={label} rows={rows} value={text} onChange={e => set(e.target.value)} disabled={disabled} />
     }
-    case 'points':
-      return <code className="pts">{JSON.stringify(raw ?? [])}</code>
     case 'unknown':
       return <span className="muted">No schema</span>
     default:
@@ -104,16 +230,19 @@ function EditableWidget({ def, optKey, label, settings, setSettings, disabled, c
   }
 }
 
-function EditableOptionRow({ schema, optKey, settings, setSettings, disabled, onOptionOpen, customWidgets, overridden, onRevertKey }) {
+function EditableOptionRow({ schema, optKey, settings, setSettings, disabled, onOptionOpen, customWidgets, overridden, onRevertKey, draftContextKey }) {
   if (optKey.startsWith('<')) return <div className="row custom"><span className="muted">⚙ Custom widget {optKey}</span></div>
   const def = schema[optKey]
   const cond = disabled ? disabled[optKey] : undefined
   const off = cond != null
   const dirty = isDirty(schema, settings, optKey)
+  const currentValue = settingRaw(settings, optKey)
+  const hasExplicitOwner = Boolean(customWidgets?.[optKey] ?? CUSTOM_WIDGETS[optKey])
+  const resetAvailable = hasExplicitOwner || (!UNOWNED_VECTOR_TYPES.has(def?.type) && !Array.isArray(currentValue))
   const reset = () => setSettings(s => { const n = { ...s }; delete n[optKey]; return n })
   const label = def?.label || def?.full_label || optKey
   return (
-    <div className={'row' + (off ? ' disabled' : '')} title={off ? `Disabled when: ${cond}` : (def?.tooltip ?? '')} data-testid={`row-${optKey}`}>
+    <div className={'row' + (off ? ' disabled' : '')} title={off ? `Disabled when: ${cond}` : (def?.tooltip ?? '')} data-testid={`row-${optKey}`} data-reset-available={resetAvailable ? 'true' : 'false'}>
       <span className="lbl-cell">
         {overridden && <button type="button" className="override-dot" onClick={() => onRevertKey?.(optKey)}
           aria-label={`Use global value for ${label}`} title="This plate's override — click to follow the global value again" data-testid={`override-${optKey}`} />}
@@ -125,8 +254,8 @@ function EditableOptionRow({ schema, optKey, settings, setSettings, disabled, on
       <code className="key">{optKey}</code>
       <ModeBadge mode={def?.mode} />
       <span className="widget-cell">
-        <EditableWidget def={def} optKey={optKey} label={label} settings={settings} setSettings={setSettings} disabled={off} customWidgets={customWidgets} />
-        {dirty && <button className="reset-btn" onClick={reset} title="Reset to default" aria-label={`Reset ${label} to default`} data-testid={`reset-${optKey}`}>↺</button>}
+        <EditableWidget def={def} optKey={optKey} label={label} settings={settings} setSettings={setSettings} disabled={off} customWidgets={customWidgets} draftContextKey={draftContextKey} />
+        {dirty && resetAvailable && <button className="reset-btn" onClick={reset} title="Reset to default" aria-label={`Reset ${label} to default`} data-testid={`reset-${optKey}`}>↺</button>}
       </span>
     </div>
   )
@@ -135,7 +264,7 @@ function EditableOptionRow({ schema, optKey, settings, setSettings, disabled, on
 // `only` pins the panel to one builder (optionally one page) and drops the search/group/page/mode chrome,
 //  so a host can embed a single page — e.g. the printer's Motion ability — inside another card.
 export default function SettingsPanel({ schema = leanSchema, uiTree = DEFAULT_TREE, toggle = UNBOUND_TOGGLE,
-  settings, setSettings, onOptionOpen, embedded = false, customWidgets, only, overriddenKeys, onRevertKey }) {
+  settings, setSettings, onOptionOpen, embedded = false, customWidgets, only, overriddenKeys, onRevertKey, draftContextKey = 'global' }) {
   const MAIN_BUILDERS = useMemo(() => mainBuilders(uiTree), [uiTree])
   const [builder, setBuilder] = useState(only?.builder ?? MAIN_BUILDERS[0] ?? '')
   const [pageIdx, setPageIdx] = useState(0)
@@ -159,8 +288,8 @@ export default function SettingsPanel({ schema = leanSchema, uiTree = DEFAULT_TR
       .filter(([k, d]) => k.includes(q) || d.label?.toLowerCase().includes(q) || d.full_label?.toLowerCase().includes(q))
       .slice(0, 60).map(([k]) => k)
   }, [q])
-  const row = (k, i) => <EditableOptionRow schema={schema} key={k + i} optKey={k} settings={settings} setSettings={setSettings} disabled={disabled} onOptionOpen={onOptionOpen} customWidgets={customWidgets}
-    overridden={overriddenKeys?.includes(k)} onRevertKey={onRevertKey} />
+  const row = (k, i) => <EditableOptionRow schema={schema} key={`${draftContextKey}:${k}:${i}`} optKey={k} settings={settings} setSettings={setSettings} disabled={disabled} onOptionOpen={onOptionOpen} customWidgets={customWidgets}
+    overridden={overriddenKeys?.includes(k)} onRevertKey={onRevertKey} draftContextKey={draftContextKey} />
   return (
     <ShadowHost css={THEME_CSS + shadowCss} className={embedded ? 'sp-embedded' : undefined}>
     <div className="settings-panel">

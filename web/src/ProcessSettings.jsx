@@ -85,6 +85,7 @@ export default function ProcessSettings({ settings, setSettings, scopeMeta }) {
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const fff = printerTechnology(settings) === 'FFF'
   const overriddenKeys = scopeMeta?.overriddenKeys ?? []
+  const draftContextKey = `${scopeMeta?.scope ?? 'global'}:${scopeMeta?.selectedPlate ?? 0}`
   const quickFields = QUICK_FIELDS.filter(field => settingsSchema[field.key]?.type === field.type)
   const supportsAvailable = settingsSchema.enable_support?.type === 'coBool'
 
@@ -111,7 +112,7 @@ export default function ProcessSettings({ settings, setSettings, scopeMeta }) {
       <summary>Advanced settings</summary>
       <div className="process-advanced-body">
         <SettingsPanel settings={settings} setSettings={setSettings} embedded
-          overriddenKeys={scopeMeta?.overriddenKeys} onRevertKey={scopeMeta?.onRevertKey} />
+          overriddenKeys={scopeMeta?.overriddenKeys} onRevertKey={scopeMeta?.onRevertKey} draftContextKey={draftContextKey} />
       </div>
     </details>
   </div>

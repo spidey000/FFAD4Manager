@@ -99,3 +99,39 @@ assert.strictEqual(undoRedoDirection(key({ ctrlKey: true, code: 'KeyZ', target: 
 assert.strictEqual(undoRedoDirection({ ...key({ ctrlKey: true, code: 'KeyZ' }), nativeEvent: { composedPath: () => [{ tagName: 'INPUT' }] } }), null)
 
 console.log('history: ok')
+
+// ---- cancelling a recorded gesture ----
+// A gizmo drag records the pre-drag state, then may be cancelled (second finger / pointercancel). Discarding the
+//  token removes that entry and restores the redo branch the record abandoned, so a cancel is not an action.
+{
+  let scene = 'a'
+  const history = createHistory({ capture: () => scene, restore: (s) => { scene = s } })
+  history.record(); scene = 'b'
+  history.travel('undo')                                    // scene 'a', redo has 'b'
+  assert.strictEqual(history.can('redo'), true)
+  const token = history.record('drag')                      // abandons redo
+  scene = 'b-dragging'
+  assert.strictEqual(history.can('redo'), false)
+  assert.strictEqual(token.discard(), true)
+  assert.strictEqual(scene, 'b-dragging', 'discard does not restore — the scene owner does that')
+  assert.deepStrictEqual(history.depth(), { undo: 0, redo: 1 })
+  history.travel('redo'); assert.strictEqual(scene, 'b')   // the pre-cancel redo state, not the abandoned drag
+}
+
+// A coalesced record has no entry of its own, so it returns no token.
+{
+  let clock = 0
+  const history = createHistory({ capture: () => 'x', now: () => clock })
+  assert.ok(history.record('drag'))
+  clock = 10
+  assert.strictEqual(history.record('drag'), null)
+}
+
+// A stale token cannot remove someone else's entry.
+{
+  const history = createHistory({ capture: () => 'x' })
+  const first = history.record('drag')
+  history.record('rotate')
+  assert.strictEqual(first.discard(), false)
+  assert.strictEqual(history.depth().undo, 2)
+}

@@ -24,15 +24,27 @@ export function createHistory({ capture, restore, limit = 50, coalesceMs = 500, 
      *  Capturing after the fact instead would need a "current snapshot" mirror kept in step with every path that
      *  can change the scene, and the first path that forgot would make undo restore a state that never existed.
      *  `kind` only drives coalescing: repeats of the same kind inside the window fold into the first one, so a
-     *  held arrow key is one undo rather than forty. */
+     *  held arrow key is one undo rather than forty.
+     *  Returns a token whose `discard()` removes this entry again — for a gesture that is cancelled before it
+     *  commits. Returns null when the record coalesced (there is no separate entry to remove). */
     record(kind = null) {
       const at = now()
       const repeat = kind != null && kind === lastKind && at - lastAt < coalesceMs && past.length > 0
       lastKind = kind; lastAt = at
-      if (repeat) return
-      past.push(capture())
+      if (repeat) return null
+      const snapshot = capture(), index = past.length
+      past.push(snapshot)
       if (past.length > limit) past.shift()
-      future.length = 0                       // a fresh action abandons the redo branch
+      const abandoned = future.splice(0)      // a fresh action abandons the redo branch
+      return {
+        discard() {
+          if (past.length !== index + 1 || past[index] !== snapshot) return false   // not the top entry any more
+          past.pop()
+          if (abandoned.length) future.unshift(...abandoned)     // cancel is not an action: the redo branch survives
+          lastKind = null
+          return true
+        },
+      }
     },
 
     /** The whole of undo and redo: pop one side, push where we are onto the other. `direction` is 'undo'|'redo'. */

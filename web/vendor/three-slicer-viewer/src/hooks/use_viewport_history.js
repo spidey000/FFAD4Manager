@@ -23,7 +23,12 @@ export function useViewportHistory({ capture, onRestore, isPreview }) {
     restore: (snapshot) => restoreRef.current?.(snapshot),
   })
 
-  const record = (kind) => { historyRef.current.record(kind); setDepth(historyRef.current.depth()) }
+  const record = (kind) => {
+    const token = historyRef.current.record(kind)
+    setDepth(historyRef.current.depth())
+    // The token lets a gesture cancel its own entry. Depth is React state, so the wrapper is what republishes it.
+    return token && { discard: () => { if (token.discard()) setDepth(historyRef.current.depth()) } }
+  }
   const travel = (direction) => {
     if (isPreview()) return false
     const moved = historyRef.current.travel(direction)

@@ -9,6 +9,9 @@ import { buildOverhangGeometry } from './overhang_view.js'; import { makeNozzleM
 import { createScaleBox, clampMeshScale } from './scale_box.js'
 import { createBoxSelect } from './box_select.js'
 import { createGestureArbiter } from './gesture_arbiter.js'
+import { createTransformCancel } from './transform_cancel.js'
+import { createGestureAbort } from './gesture_abort.js'
+import { sceneStatus } from './status_text.js'
 import { createPaintInput } from './paint_input.js'
 import { createSectionPlane } from './section_plane.js'
 import { DEFAULT_BED, DEFAULT_FILAMENT_COLORS } from '../core/viewer_defaults.js'
@@ -121,10 +124,11 @@ export function useThreeScene(deps) {
       orbit.enabled = !e.value
       if (e.value) {
         // Undo records the state BEFORE the drag (the commit only says it ended); not the tower's — a host setting.
-        if (!isTower(transform.object)) deps.onTransformStarted?.()
+        transformCancel.begin(isTower(transform.object) ? null : deps.onTransformStarted?.())
         if (transform.object && !isTower(transform.object)) deps.onPaintDragStart?.()
       } else deps.onPaintDragEnd?.()
       if (!e.value) {
+        if (transformCancel.takeSkip()) { three.current.invalidate?.(); return }
         // The tower stands on the bed by definition and has no geometry to seat — it reports its new XY instead.
         if (transform.object && transform.object.userData?.isPrimeTower) {
           transform.object.position.y = transform.object.userData.halfHeight
@@ -213,6 +217,7 @@ export function useThreeScene(deps) {
       for (const mesh of selection) pivot.attach(mesh)
       transform.attach(pivot)
     }
+    const transformCancel = createTransformCancel({ transform, pivot, releasePivot })
     const selectOnly = (mesh) => {
       selection.clear()
       if (mesh) selection.add(mesh)
@@ -287,16 +292,10 @@ export function useThreeScene(deps) {
       if (m.material.emissive) m.material.emissive.set(isSelected ? THEME.accent : m === hovered ? THEME.accentHover : 0x000000)
       else if (m.userData?.isPrimeTower) m.material.opacity = isSelected ? 0.6 : m === hovered ? 0.5 : 0.35
     } }
-    // With several objects selected the name of one of them says less than the count does.
-    const selectionLabel = () => (selection.size > 1 ? `${selection.size} objects`
-      : selected ? selected.userData.name : '—')
-    const statusText = () => objectsRef.current.length
-      // The keyboard half of the hint is dropped when features.shortcuts is off — a status bar advertising a key
-      //  that has been switched off is worse than a shorter status bar.
-      ? `${objectsRef.current.length} object(s) · selected: ${selectionLabel()}`
-        + (keyRef.current ? ' | M/R/S · Ctrl+click to add · Shift+drag to box-select · ? for shortcuts' : ' | Ctrl+click to add · Shift+drag to box-select')
-      : `hover: ${hovered ? hovered.userData.name : '—'} · selected: ${selectionLabel()} | left-drag to orbit`
-        + (keyRef.current ? ' · ? for shortcuts' : '')
+    // The keyboard half of the hint is dropped when features.shortcuts is off — a status bar advertising a key
+    //  that has been switched off is worse than a shorter status bar.
+    const statusText = () => sceneStatus({ count: objectsRef.current.length, selectedCount: selection.size,
+      selectedName: selected?.userData.name, hoveredName: hovered?.userData.name, shortcuts: !!keyRef.current })
     const toPointer = ev => { const r = renderer.domElement.getBoundingClientRect(); pointer.x = ((ev.clientX - r.left) / r.width) * 2 - 1; pointer.y = -((ev.clientY - r.top) / r.height) * 2 + 1 }
     const pick = () => { raycaster.setFromCamera(pointer, camera); const hits = raycaster.intersectObjects(activeMeshes(), false); return hits.length ? hits[0].object : null }
     // Stage 20: painting — the raycast -> kernel-coordinate conversion, the brush cursor preview and the stroke's
@@ -340,6 +339,7 @@ export function useThreeScene(deps) {
     }
     // ---- Box select (box_select.js holds the band and the projection; this is what it means here) --------------
     const boxSelect = createBoxSelect({ camera, domElement: renderer.domElement, mount })
+    const abortGesture = createGestureAbort({ transformCancel, refreshGizmo, transform, scaleBox, boxSelect, paintDrawingRef, paintInput, orbit, invalidate })
     const endBand = () => {
       const picked = boxSelect.end(objectsRef.current.filter(o => o.visible !== false).map(o => o.mesh))
       orbit.enabled = true
@@ -361,7 +361,7 @@ export function useThreeScene(deps) {
       //  and drop the tap candidate so the eventual release cannot select. Paint resumes only on a fresh contact.
       if (press.second) {
         down = null
-        if (paintDrawingRef.current) { paintDrawingRef.current = false; paintInput.endStroke(); orbit.enabled = true }
+        abortGesture()
         return
       }
       // S2: no gizmo/painting in preview — a tap still selects the plate (onUp); objects are hidden, so it comes from the bed plane.
@@ -407,10 +407,8 @@ export function useThreeScene(deps) {
       // Cancellation aborts the gesture: no selection, no band, no committed scale. Restore the camera and the brush.
       if (ev.type === 'pointercancel') {
         down = null
-        if (boxSelect.dragging()) boxSelect.cancel()
-        if (scaleBox.dragging()) { scaleBox.end(); transform.enabled = true }
+        abortGesture()
         orbit.enabled = true
-        if (paintDrawingRef.current) { paintDrawingRef.current = false; paintInput.endStroke() }
         invalidate()
         return
       }

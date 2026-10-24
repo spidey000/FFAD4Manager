@@ -148,9 +148,17 @@ export function createScaleBox({ scene, camera, domElement }) {
   }
 
   const end = () => { const was = drag; drag = null; return was?.target || null }
+  // Abort a corner drag without committing: the live scale has been applied on every move, so the start value is
+  //  the only way back (a second finger turns the gesture into a camera pinch).
+  const cancel = () => {
+    const was = drag; drag = null
+    if (!was) return false
+    was.target.scale.copy(was.scale); was.target.updateMatrixWorld(true)
+    return true
+  }
 
   return {
-    update, hitTest, begin, move, end,
+    update, hitTest, begin, move, end, cancel,
     dragging: () => !!drag,
     dispose: () => {
       scene.remove(group)

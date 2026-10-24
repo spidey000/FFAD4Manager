@@ -41,7 +41,9 @@ const DEFAULT_TREE = Object.fromEntries(Object.entries(uiTreeKeys)
 const UNBOUND_TOGGLE = { makeCfg, disabledKeys }
 const mainBuilders = (uiTree) => Object.keys(uiTree).filter(b => uiTree[b].length > 0)
 
-function isDirty(schema, settings, key) {
+function isDirty(schema, settings, key, vectorOwner = null) {
+  if (vectorOwner && isOwnerNumericType(schema[key]?.type) && settings?.[key] === null) return false
+  if (ownerEditable(vectorOwner, key)) return String(settings?.[key] ?? '') !== String(vectorOwner.resetValues[key])
   if (!settings || !(key in settings)) return false
   const d = schema[key]?.default
   const def = Array.isArray(d) ? d[0] : d
@@ -66,7 +68,32 @@ function widgetFor(def) {
 function ModeBadge({ mode }) { return <span className={`badge mode-${mode ?? 'none'}`}>{mode ?? '—'}</span> }
 
 const DRAFT_TYPES = new Set(['coFloat', 'coInt', 'coPercent', 'coFloatOrPercent'])
-const UNOWNED_VECTOR_TYPES = new Set(['coFloats', 'coInts', 'coPercents', 'coBools', 'coEnums', 'coFloatsOrPercents', 'coStrings', 'coPoint', 'coPoints', 'coPointsGroups'])
+const VECTOR_SCALAR_TYPES = { coFloats: 'coFloat', coInts: 'coInt', coPercents: 'coPercent' }
+const UNOWNED_VECTOR_TYPES = new Set(['coFloats', 'coInts', 'coPercents', 'coBools', 'coEnums', 'coFloatsOrPercents', 'coStrings', 'coPointsGroups'])
+const isOwnerNumericType = type => DRAFT_TYPES.has(type) || Object.prototype.hasOwnProperty.call(VECTOR_SCALAR_TYPES, type)
+
+function ownerSlotValid(vectorOwner) {
+  return Number.isInteger(vectorOwner?.activeIndex) && vectorOwner.activeIndex >= 0
+    && Number.isInteger(vectorOwner?.slotCount) && vectorOwner.activeIndex < vectorOwner.slotCount
+}
+
+function ownerEditable(vectorOwner, key) {
+  const resetValue = vectorOwner?.resetValues?.[key]
+  return ownerSlotValid(vectorOwner) && !!vectorOwner?.editableKeys?.includes(key)
+    && Object.prototype.hasOwnProperty.call(vectorOwner.resetValues ?? {}, key)
+    && Number.isFinite(resetValue)
+}
+
+function schemaForVectorOwner(schema, vectorOwner) {
+  if (!vectorOwner) return schema
+  const projected = { ...schema }
+  for (const key of vectorOwner.editableKeys ?? []) {
+    if (!ownerEditable(vectorOwner, key)) continue
+    const scalarType = VECTOR_SCALAR_TYPES[projected[key]?.type]
+    if (scalarType) projected[key] = { ...projected[key], type: scalarType }
+  }
+  return projected
+}
 
 function displayScalarDraft(value, definition) {
   if (value == null) return ''
@@ -74,8 +101,8 @@ function displayScalarDraft(value, definition) {
   return String(value)
 }
 
-function readOnlyValue(label, optKey, value, reason) {
-  let text = '—'
+function readOnlyValue(label, optKey, value, reason, emptyText = '—') {
+  let text = emptyText
   if (value != null) {
     try { text = typeof value === 'string' ? value : JSON.stringify(value) } catch { text = String(value) }
   }
@@ -182,11 +209,30 @@ function ScalarDraftWidget({ def, optKey, label, raw, settings, setSettings, dis
   </span>
 }
 
-function EditableWidget({ def, optKey, label, settings, setSettings, disabled, customWidgets, draftContextKey }) {
+function EditableWidget({ def, optKey, label, settings, setSettings, disabled, customWidgets, draftContextKey, vectorOwner }) {
   const raw = settingRaw(settings, optKey)
   const set = v => setSettings(s => ({ ...s, [optKey]: v }))
   const Custom = customWidgets?.[optKey] ?? CUSTOM_WIDGETS[optKey]
   if (Custom) return <Custom def={def} value={raw} onChange={set} disabled={disabled} />
+  if (vectorOwner && isOwnerNumericType(def?.type) && !ownerEditable(vectorOwner, optKey)) {
+    const hasProjectedValue = Object.prototype.hasOwnProperty.call(settings ?? {}, optKey) && settings[optKey] !== undefined
+    if (hasProjectedValue && settings[optKey] === null) {
+      return readOnlyValue(label, optKey, null, 'Not set for this filament.', 'Not set')
+    }
+    if (hasProjectedValue) {
+      return readOnlyValue(label, optKey, settings[optKey], 'Read only — this filament slot has no editable numeric baseline.')
+    }
+    const hasBaseline = ownerSlotValid(vectorOwner)
+      && Object.prototype.hasOwnProperty.call(vectorOwner.resetValues ?? {}, optKey)
+      && Number.isFinite(vectorOwner.resetValues[optKey])
+    if (hasBaseline) {
+      return readOnlyValue(label, optKey, vectorOwner.resetValues[optKey], 'Read only — this filament slot is not editable.')
+    }
+    const reason = ownerSlotValid(vectorOwner)
+      ? 'No verified value or baseline for this filament.'
+      : 'No active filament slot.'
+    return readOnlyValue(label, optKey, null, reason, 'Not set')
+  }
   if (UNOWNED_VECTOR_TYPES.has(def?.type)) return readOnlyValue(label, optKey, raw, 'Read only — vector editing is not available here.')
   if (DRAFT_TYPES.has(def?.type)) {
     if (Array.isArray(raw)) return readOnlyValue(label, optKey, raw, 'Read only — this value is stored as a vector.')
@@ -230,16 +276,21 @@ function EditableWidget({ def, optKey, label, settings, setSettings, disabled, c
   }
 }
 
-function EditableOptionRow({ schema, optKey, settings, setSettings, disabled, onOptionOpen, customWidgets, overridden, onRevertKey, draftContextKey }) {
+function EditableOptionRow({ schema, optKey, settings, setSettings, disabled, onOptionOpen, customWidgets, overridden, onRevertKey, draftContextKey, vectorOwner }) {
   if (optKey.startsWith('<')) return <div className="row custom"><span className="muted">⚙ Custom widget {optKey}</span></div>
   const def = schema[optKey]
   const cond = disabled ? disabled[optKey] : undefined
   const off = cond != null
-  const dirty = isDirty(schema, settings, optKey)
+  const dirty = isDirty(schema, settings, optKey, vectorOwner)
   const currentValue = settingRaw(settings, optKey)
   const hasExplicitOwner = Boolean(customWidgets?.[optKey] ?? CUSTOM_WIDGETS[optKey])
-  const resetAvailable = hasExplicitOwner || (!UNOWNED_VECTOR_TYPES.has(def?.type) && !Array.isArray(currentValue))
-  const reset = () => setSettings(s => { const n = { ...s }; delete n[optKey]; return n })
+  const vectorEditable = ownerEditable(vectorOwner, optKey)
+  const resetAvailable = vectorOwner
+    ? vectorEditable && vectorOwner.scope === 'global'
+    : hasExplicitOwner || (!UNOWNED_VECTOR_TYPES.has(def?.type) && !Array.isArray(currentValue))
+  const reset = () => vectorEditable
+    ? setSettings(current => ({ ...current, [optKey]: vectorOwner.resetValues[optKey] }))
+    : setSettings(s => { const n = { ...s }; delete n[optKey]; return n })
   const label = def?.label || def?.full_label || optKey
   return (
     <div className={'row' + (off ? ' disabled' : '')} title={off ? `Disabled when: ${cond}` : (def?.tooltip ?? '')} data-testid={`row-${optKey}`} data-reset-available={resetAvailable ? 'true' : 'false'}>
@@ -254,8 +305,10 @@ function EditableOptionRow({ schema, optKey, settings, setSettings, disabled, on
       <code className="key">{optKey}</code>
       <ModeBadge mode={def?.mode} />
       <span className="widget-cell">
-        <EditableWidget def={def} optKey={optKey} label={label} settings={settings} setSettings={setSettings} disabled={off} customWidgets={customWidgets} draftContextKey={draftContextKey} />
-        {dirty && resetAvailable && <button className="reset-btn" onClick={reset} title="Reset to default" aria-label={`Reset ${label} to default`} data-testid={`reset-${optKey}`}>↺</button>}
+        <EditableWidget def={def} optKey={optKey} label={label} settings={settings} setSettings={setSettings} disabled={off} customWidgets={customWidgets} draftContextKey={draftContextKey} vectorOwner={vectorOwner} />
+        {dirty && resetAvailable && <button className="reset-btn" onClick={reset}
+          title={vectorEditable ? 'Reset this filament slot to its material baseline' : 'Reset to default'}
+          aria-label={`Reset ${label} to ${vectorEditable ? 'this filament’s material baseline' : 'default'}`} data-testid={`reset-${optKey}`}>↺</button>}
       </span>
     </div>
   )
@@ -264,12 +317,13 @@ function EditableOptionRow({ schema, optKey, settings, setSettings, disabled, on
 // `only` pins the panel to one builder (optionally one page) and drops the search/group/page/mode chrome,
 //  so a host can embed a single page — e.g. the printer's Motion ability — inside another card.
 export default function SettingsPanel({ schema = leanSchema, uiTree = DEFAULT_TREE, toggle = UNBOUND_TOGGLE,
-  settings, setSettings, onOptionOpen, embedded = false, customWidgets, only, overriddenKeys, onRevertKey, draftContextKey = 'global' }) {
+  settings, setSettings, onOptionOpen, embedded = false, customWidgets, only, overriddenKeys, onRevertKey, draftContextKey = 'global', vectorOwner = null }) {
   const MAIN_BUILDERS = useMemo(() => mainBuilders(uiTree), [uiTree])
   const [builder, setBuilder] = useState(only?.builder ?? MAIN_BUILDERS[0] ?? '')
   const [pageIdx, setPageIdx] = useState(0)
   const [mode, setMode] = useState('all')
   const [query, setQuery] = useState('')
+  const panelSchema = useMemo(() => schemaForVectorOwner(schema, vectorOwner), [schema, vectorOwner])
   // Builders are filtered by the printer profile's technology — FFF tabs for a filament printer, the SLA tabs
   //  for a resin one. When the technology flips, the selected builder may no longer be offered; the render falls
   //  back to the first offered one rather than writing state during render. `only` bypasses the filter: a host
@@ -284,12 +338,12 @@ export default function SettingsPanel({ schema = leanSchema, uiTree = DEFAULT_TR
   const q = query.trim().toLowerCase()
   const hits = useMemo(() => {
     if (!q) return []
-    return Object.entries(schema)
+    return Object.entries(panelSchema)
       .filter(([k, d]) => k.includes(q) || d.label?.toLowerCase().includes(q) || d.full_label?.toLowerCase().includes(q))
       .slice(0, 60).map(([k]) => k)
-  }, [q])
-  const row = (k, i) => <EditableOptionRow schema={schema} key={`${draftContextKey}:${k}:${i}`} optKey={k} settings={settings} setSettings={setSettings} disabled={disabled} onOptionOpen={onOptionOpen} customWidgets={customWidgets}
-    overridden={overriddenKeys?.includes(k)} onRevertKey={onRevertKey} draftContextKey={draftContextKey} />
+  }, [q, panelSchema])
+  const row = (k, i) => <EditableOptionRow schema={panelSchema} key={`${draftContextKey}:${k}:${i}`} optKey={k} settings={settings} setSettings={setSettings} disabled={disabled} onOptionOpen={onOptionOpen} customWidgets={customWidgets}
+    overridden={overriddenKeys?.includes(k)} onRevertKey={onRevertKey} draftContextKey={draftContextKey} vectorOwner={vectorOwner} />
   return (
     <ShadowHost css={THEME_CSS + shadowCss} className={embedded ? 'sp-embedded' : undefined}>
     <div className="settings-panel">
@@ -320,7 +374,7 @@ export default function SettingsPanel({ schema = leanSchema, uiTree = DEFAULT_TR
           {!only && <h2>{page.page} <span className="muted">Tab.cpp:{page.line}</span></h2>}
           {page.groups.map(g => {
             // Embedded in a host card there is no room for the unimplemented-widget placeholders — drop them there.
-            const opts = g.options.filter(k => passesMode(schema, k, mode) && !(only && k.startsWith('<')))
+            const opts = g.options.filter(k => passesMode(panelSchema, k, mode) && !(only && k.startsWith('<')))
             if (!opts.length) return null
             return (<section key={g.group + g.line}>
               <h3>{g.group || '(untitled group)'} <span className="muted">:{g.line}</span></h3>

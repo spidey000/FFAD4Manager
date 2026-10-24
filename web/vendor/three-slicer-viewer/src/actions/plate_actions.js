@@ -38,15 +38,20 @@ const SL1_TUNE = (key, dflt) => {
 }
 const SL1_SLICE_WORKERS = SL1_TUNE('sl1Workers', 6)
 
+// Slice provenance belongs to the result, not its enumerable shape: results are passed through the
+// viewer and may be exported long after the settings that produced them have changed.
+const generatedSliceSnapshots = new WeakMap()
+const copySnapshot = (value) => structuredClone(value ?? {})
+
 // Per-plate slicing/caching/export (stage 29-2) + the plate tabs (add/delete/select).
 // The component keeps owning the refs/state; this factory only receives what it uses and is rebuilt each
 //  render so the values it closes over (settings, canvasMode, downgradeOffer) stay fresh.
 export function makePlateActions(deps) {
   const {
-    apiRef, selectedPlateRef, plateCountRef, placeXRef, plateResultsRef, plateOffsetsRef, plateTpRef,
+    apiRef, selectedPlateRef, plateCountRef, sceneRevisionRef, placeXRef, plateResultsRef, plateOffsetsRef, plateTpRef,
     layersDataRef, toolpathRef, segDataRef, layerLoRef, layerHiRef, lineWidthRef, downgradeRef,
     settings, plateSettings, setPlateSettings, canvasMode, downgradeOffer, onExport,
-    runSlice, createPoolContext, kernelKindRef, progressSinkRef, setPlateRun, setSliceRate,
+    runSlice, createPoolContext, kernelKindRef, progressSinkRef, setPlateRun, setSliceRate, slicing,
     ensurePlateToolpaths, buildPlateToolpath, showFocusedColorRange, disposePlateToolpath,
     setStats, setOverBed, setLayerCount, setSegCount, setColorRange, setRoleLegend, setGcodeResult, setExporting, setSl1Ready,
     setLayerLo, setLayerHi, setCanvasMode, setSlicedPlateCount, setSliceMenu, setError, setSliceNotice, clearError, clearSliceNotice,
@@ -73,7 +78,11 @@ export function makePlateActions(deps) {
   //  it is displayed, so switching plate tabs — which re-displays a cached result — does not re-announce it.
   //  `throughput` rides along beside `stats` rather than inside it, because that is where the engine puts it: it is
   //  measured around the call (wall ms, layers/second, ms per million segments), not reported by the kernel.
-  const announceSlice = (plate, r) => { if (r && !r.error) onSlicedRef?.current?.({ plate, stats: r.stats, gcode: r.gcode, throughput: r.throughput }) }
+  const announceSlice = (plate, r) => {
+    if (!r || r.error) return
+    const snapshot = generatedSliceSnapshots.get(r)
+    onSlicedRef?.current?.({ plate, stats: r.stats, gcode: r.gcode, throughput: r.throughput, snapshot })
+  }
 
   // Shows a cached result in Preview — every cached plate's toolpath renders at its own offset simultaneously,
   //  and idx becomes the focus (target of the slider/stats/G-code). Focusing a plate with no cache = empty state (leftovers cleared).
@@ -128,7 +137,10 @@ export function makePlateActions(deps) {
   //  whole G-code each time (33-203ms per switch on haaland.3mf) for a file that is rarely saved.
   async function exportPlainGcode(result) {
     if (!result) return
-    await download(await gcodeForExport(result, selectedPlateRef.current), `plate_${selectedPlateRef.current + 1}.gcode`, 'text/plain', onExport)
+    const plate = selectedPlateRef.current
+    const snapshot = generatedSliceSnapshots.get(result)
+    const hostExport = onExport && ((file, name) => onExport(file, name, { plate, snapshot }))
+    await download(await gcodeForExport(result, plate), `plate_${plate + 1}.gcode`, 'text/plain', hostExport)
   }
   // Build and save the focused plate's SL1 archive. Built on demand — rasterizing hundreds of layer PNGs is
   //  seconds of work, and paying it on every plate focus for a file that may never be saved is the same waste
@@ -470,6 +482,14 @@ export function makePlateActions(deps) {
   async function onSlice(scope = 'current') {
     setSliceMenu(false); clearError(); clearSliceNotice(); setDowngradeOffer(null)
     const idx0 = selectedPlateRef.current
+    // Capture at request start. In-flight slicing intentionally continues after edits, so using the
+    // current render when a result lands would incorrectly bless old G-code with new settings.
+    const sliceSnapshot = {
+      settings: copySnapshot(settings),
+      plateSettings: copySnapshot(plateSettings),
+      layout: { plateCount: plateCountRef.current },
+      sceneRevision: sceneRevisionRef?.current ?? 0,
+    }
     // Per plate, not once for the run: a plate override can change line_width, and the toolpath mesh built when
     //  that plate's result lands reads whatever this ref holds at the time.
     const plateLineWidth = (i) => { lineWidthRef.current = deriveKernelParams(effectiveSettings(settings, plateSettings, i)).line_width }
@@ -522,6 +542,7 @@ export function makePlateActions(deps) {
           const { r, economy, classicWalls } = await runSlice(merged, ctx, {
             syncPaint: () => syncPaintSelector?.(merged, { holdForSlice: true }), resyncPaint: () => syncPaintSelector?.(merged) })
           plateLineWidth(i)
+          if (r && !r.error) generatedSliceSnapshots.set(r, sliceSnapshot)
           plateResultsRef.current[i] = r; refreshSlicedCount(); announceSlice(i, r); sliced++   // no automatic download — switch tabs to inspect, save via an explicit export
           if (economy) anyEconomy = true
           if (classicWalls) anyClassic = true
@@ -587,6 +608,7 @@ export function makePlateActions(deps) {
         const { r, economy, classicWalls, params } = await runSlice(merged, null, {
           syncPaint: () => syncPaintSelector?.(merged, { holdForSlice: true }), resyncPaint: () => syncPaintSelector?.(merged) })
         if (r?.stats) log.info(`[vp-prof] kernel stages p1=${(r.stats.t_pass1_ms/1000).toFixed(1)}s surf=${(r.stats.t_surface_ms/1000).toFixed(1)}s sup=${(r.stats.t_support_ms/1000).toFixed(1)}s emit=${(r.stats.t_emit_ms/1000).toFixed(1)}s reuse=${params.reuse_stages}`)
+        if (r && !r.error) generatedSliceSnapshots.set(r, sliceSnapshot)
         plateResultsRef.current[idx0] = r; refreshSlicedCount(); announceSlice(idx0, r); setSlicing(false); showPlateResult(idx0)
         clearError(); setDowngradeOffer(null)   // a lower rung of the ladder succeeded — do not leave the failed first attempt's banner up
         // The SLA support tree can fail while the slice itself stands — saying so beats a silently bare model.
@@ -613,8 +635,9 @@ export function makePlateActions(deps) {
     try { await onSlice(off.scope) } finally { downgradeRef.current = false }
   }
   // Add/remove/select plates
-  function addPlate() { setPlateCount(n => Math.min(MAX_PLATES, n + 1)) }
+  function addPlate() { if (slicing) return; setPlateCount(n => Math.min(MAX_PLATES, n + 1)) }
   function deletePlate() {
+    if (slicing) return
     setPlateCount(n => {
       if (n <= 1) return n
       const last = n - 1; delete plateResultsRef.current[last]; disposePlateToolpath(last); refreshSlicedCount()

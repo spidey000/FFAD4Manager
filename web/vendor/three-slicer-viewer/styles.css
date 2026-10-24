@@ -477,6 +477,9 @@
 .app-shell[data-layout="compact"][data-dragging="true"] .sidebar { flex-basis: var(--sheet-height); }
 .app-shell[data-layout="compact"] .sidebar-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; }
 .app-shell[data-layout="compact"] .compact-action-surface { flex: 0 0 auto; order: 2; max-height: 148px; overflow-y: auto; background: var(--_light-bg); border-top: 1px solid var(--_light-border); }
+/* The slice menu opens above its trigger, often outside this capped action surface. While open, let it escape the
+   surface's scrollport and raise the surface above the viewport so the canvas cannot cover or intercept its items. */
+.app-shell[data-layout="compact"] .compact-action-surface:has(.slice-menu) { position: relative; z-index: 7; overflow: visible; }
 .app-shell[data-layout="compact"] .viewport-col { order: 1; }
 .app-shell[data-layout="compact"] .sidebar { order: 3; }
 .sheet-controls { flex: 0 0 auto; display: flex; justify-content: center; align-items: center; gap: 8px; min-height: 48px; padding: 2px 10px; border-bottom: 1px solid var(--_light-divider); }

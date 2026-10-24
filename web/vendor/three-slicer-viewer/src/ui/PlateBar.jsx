@@ -6,7 +6,7 @@ import React from 'react'
 // `plateRun` is an all-plates run's map (core/slice_pool.js): each tab shows what its plate is doing — busy,
 // queued, done, failed — separately from being selected, because with several plates slicing at once the
 // selection can no longer follow the work.
-export default function PlateBar({ plateCount, selectedPlate, maxPlates, onSelect, onAdd, onDelete, overridePlates, plateRun = null }) {
+export default function PlateBar({ plateCount, selectedPlate, maxPlates, onSelect, onAdd, onDelete, overridePlates, plateRun = null, slicing = false }) {
   return (
     <div className="plate-bar" data-testid="plate-bar" role="tablist" aria-label="Plates">
       {Array.from({ length: plateCount }, (_, i) => {
@@ -23,8 +23,12 @@ export default function PlateBar({ plateCount, selectedPlate, maxPlates, onSelec
           </button>
         )
       })}
-      <button className="plate-add" onClick={onAdd} disabled={plateCount >= maxPlates} title="Add an empty plate (max 9) — each plate slices and exports separately" data-testid="plate-add">+</button>
-      {plateCount > 1 && <button className="plate-del" onClick={onDelete} title="Delete the last plate and its slice result" data-testid="plate-del">−</button>}
+      <button className="plate-add" onClick={onAdd} disabled={slicing || plateCount >= maxPlates}
+        title={slicing ? 'Layout is locked while slicing' : 'Add an empty plate (max 9) — each plate slices and exports separately'}
+        aria-label={slicing ? 'Add plate (layout locked while slicing)' : 'Add plate'} data-testid="plate-add">+</button>
+      {plateCount > 1 && <button className="plate-del" onClick={onDelete} disabled={slicing}
+        title={slicing ? 'Layout is locked while slicing' : 'Delete the last plate and its slice result'}
+        aria-label={slicing ? 'Delete plate (layout locked while slicing)' : 'Delete last plate'} data-testid="plate-del">−</button>}
     </div>
   )
 }

@@ -80,7 +80,17 @@
 :host(.sp-embedded) .sp-top { padding: 8px; }
 :host(.sp-embedded) .sp-builder { flex-wrap: wrap; }
 :host(.sp-embedded) .sp-pages button, :host(.sp-embedded) .sp-modes button { min-height: 48px; }
-:host(.sp-embedded) .row { grid-template-columns: minmax(0, 1fr) minmax(0, auto); }
+:host(.sp-embedded) .row {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 200px);
+  grid-template-areas: "label badge" "key widget";
+  column-gap: 10px;
+}
+:host(.sp-embedded) .row .lbl-cell { grid-area: label; min-width: 0; }
+:host(.sp-embedded) .row .key { grid-area: key; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+:host(.sp-embedded) .row .badge { grid-area: badge; justify-self: end; }
+:host(.sp-embedded) .row .widget-cell { grid-area: widget; justify-self: stretch; min-width: 0; }
+:host(.sp-embedded) .row .widget-cell > .inputwrap { width: 100%; min-width: 0; }
+:host(.sp-embedded) .row .schema-draft-wrap > input { flex: 1 1 0; }
 :host(.sp-embedded) .row input:not([type="checkbox"]):not([type="color"]),
 :host(.sp-embedded) .row select, :host(.sp-embedded) .row textarea { max-width: min(200px, 54vw); min-width: 0; font-size: 16px; }
 :host(.sp-embedded) .row .key { overflow-wrap: anywhere; }
@@ -94,6 +104,24 @@
   .settings-panel .row > .pts, .settings-panel .row > .muted { justify-self: stretch; }
 .settings-panel .row input:not([type="checkbox"]):not([type="color"]),
 .settings-panel .row select, .settings-panel .row textarea { max-width: 100%; min-width: 0; font-size: 16px; }
+}
+
+/* Embedded rows keep their label/key columns even when the host card is phone-width. */
+@media (max-width: 520px) {
+  :host(.sp-embedded) .settings-panel .row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, min(42vw, 160px));
+    grid-template-areas: "label badge" "key widget";
+    column-gap: 8px;
+    row-gap: 2px;
+    padding: 5px 0;
+  }
+  :host(.sp-embedded) .settings-panel .row .lbl-cell { grid-area: label; }
+  :host(.sp-embedded) .settings-panel .row .key { grid-area: key; }
+  :host(.sp-embedded) .settings-panel .row .badge { grid-area: badge; }
+  :host(.sp-embedded) .settings-panel .row .widget-cell { grid-area: widget; }
+  :host(.sp-embedded) .settings-panel .row input:not([type="checkbox"]):not([type="color"]),
+  :host(.sp-embedded) .settings-panel .row select,
+  :host(.sp-embedded) .settings-panel .row textarea { max-width: 100%; width: 100%; }
 }
 
 /* Schema widgets keep a compact visual style but expose full-size, readable touch controls. */

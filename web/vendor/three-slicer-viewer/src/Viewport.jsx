@@ -18,6 +18,7 @@ import { useHostEvents } from './hooks/use_host_events.js'
 import { useInjection, useImportedGcode } from './hooks/use_injection.js'
 import { useMoveScrub } from './hooks/use_move_scrub.js'
 import { useViewportHistory, undoRedoDirection } from './hooks/use_viewport_history.js'
+import { useSceneRevision } from './hooks/use_scene_revision.js'
 import { useThreeScene } from './scene/use_three_scene.js'
 import {
   makeToolpathView, useNoopSlicer, makeSupportPaint, paintKindOfMode, MAX_PAINT_EXTRUDERS,
@@ -246,6 +247,8 @@ export default function Viewport({
   const [sliceNotice, setSliceNotice] = useState('')       // e.g. "Memory pressure — finished in economy mode (no preview)"
   const [downgradeOffer, setDowngradeOffer] = useState(null) // {scope} — even economy mode failed -> offer a simplified retry
 
+  const { sceneRevisionRef, publishObjects, publishPaintCounts, publishPaintStateCounts, holdPaintSync } = useSceneRevision(onEventRef, { setObjects, setPaintCounts, setPaintStateCounts })
+
   // ---- Host change notifications (onEvent) — the effects live in use_host_events.js ----
   useHostEvents(onEventRef, {
     canvasMode, objects, selectedPlate, plateCount, extruderColors, autoSlice, slicing, progress, sliceRate,
@@ -263,16 +266,16 @@ export default function Viewport({
   //  the same key — a spread would make that a silent ordering question), and anything produced by a factory
   //  further down, which cannot exist yet.
   const wiring = {
-    catalog: catalogProp, settings, setSettings, plateSettings, setPlateSettings,
-    apiRef, workerRef, objectsRef, keyRef, clipboardRef, onSlicedRef, flushPaintRef,
+    catalog: catalogProp, settings, setSettings, plateSettings, setPlateSettings, slicing,
+    apiRef, workerRef, objectsRef, keyRef, clipboardRef, onSlicedRef, flushPaintRef, sceneRevisionRef,
     layersDataRef, toolpathRef, segDataRef, plateTpRef, lineWidthRef, plateResultsRef, plateOffsetsRef,
     selectedPlateRef, plateCountRef, placeXRef, canvasModeRef, selectorGeomRef, registerSelectorRef,
     paintXformRef, paintOverlayRef, paintModeRef, paintToolRef,
     brushRadiusRef, materialExtruderRef, extruderColorsRef, showTravelRef, viewTypeRef, layerLoRef, layerHiRef,
-    setOk, setStatus, setGmode, setCtxMenu, setBrushRadius, setObjects, setTriWarn, setDragOver, setExporting, setSl1Ready,
+    setOk, setStatus, setGmode, setCtxMenu, setBrushRadius, setObjects: publishObjects, setTriWarn, setDragOver, setExporting, setSl1Ready,
     setProgress, setSliceRate, setSlicing, setError, setStats, setOverBed, setLayerCount, setLayerLo, setLayerHi,
     setPlateRun, setSegCount, setColorRange, setRoleLegend, setGcodeResult, setCanvasMode, setSliceNotice, setDowngradeOffer,
-    setPaintCounts, setPaintModeState, setPaintStateCounts, setFillAngle,
+    setPaintCounts: publishPaintCounts, setPaintModeState, setPaintStateCounts: publishPaintStateCounts, setFillAngle,
     setSlicedPlateCount, setSliceMenu, setPlateCount, setSelectedPlate, clearError: () => setError(''),
     clearSliceNotice: () => setSliceNotice(''), clearTriWarn: () => setTriWarn(''), }   // "nothing to show", named once
 
@@ -434,14 +437,13 @@ export default function Viewport({
     //  only in its selector would go with it, and the resync after the recreate loads the plate from the store.
     // Resolves { kind, release }: the annotation the selector holds (use_slicer.js buildParams reads its counts as
     //  tools only for material paint) and, with `holdForSlice`, the release of the hold that keeps every other
-    //  selector job queued until the slice is posted (support_paint.js holdSelectorForSlice).
-    syncPaintSelector: async (merged, { holdForSlice = false } = {}) => {
+    //  selector job queued until the slice is posted (support_paint.js holdSelectorForSlice); held from the paint bumper (import replies read paint, they do not edit it).
+    syncPaintSelector: (merged, { holdForSlice = false } = {}) => holdPaintSync(async () => {
       const nothing = { kind: null, release: () => {} }
       // A resin slice reads no paint (slice_sla has no selector), so it neither closes the brush nor waits on a load.
       if (frameOf(merged?.plate ?? selectedPlateRef.current).tech === 'SLA') return nothing
-      // No stroke may reach the selector while it slices: the slice below may swap it to another annotation ('auto'),
-      //  and a stroke of the open brush would then be filed under the wrong kind. The preview a finished slice
-      //  switches to closes the brush anyway.
+      // No stroke may reach the selector while it slices: the slice below may swap it to another annotation ('auto'), and a
+      //  stroke of the open brush would then be filed under the wrong kind. The preview a finished slice switches to closes it.
       if (paintModeRef.current !== 'off') setPaintMode('off')
       const needsSelector = selectorGeomRef.current || merged?.paint?.color || merged?.paint?.supports
       if (!needsSelector) return nothing
@@ -456,7 +458,7 @@ export default function Viewport({
       if (result === 'load-failed') { release(); throw new Error('Worker failed to load the plate paint') }
       if (result === 'export-failed') { release(); throw new Error('Worker failed to hand back the plate paint') }
       return { kind: selectorGeomRef.current?.kind ?? null, release }
-    },
+    }),
   })
   selectPlateRef.current = selectPlate
 
@@ -525,7 +527,7 @@ export default function Viewport({
     if (globalTech === 'SLA') { setSettings(s => ({ ...s, display_width: w, display_height: d })); return }   // global map only (inputs disabled in plate scope)
     setSettings(s => ({ ...s, printable_area: bedRectangle(settingRaw(settings, 'printable_area'), w, d) }))
   }
-  function setObjExtruder(id, e) { recordHistoryRef.current?.(); apiRef.current?.setObjectExtruder(id, e); setObjects(objectRows(objectsRef.current, apiRef.current)) }
+  function setObjExtruder(id, e) { recordHistoryRef.current?.(); apiRef.current?.setObjectExtruder(id, e); publishObjects(objectRows(objectsRef.current, apiRef.current)) }
 
   // The preview card's controls — the dual layer slider, single-layer mode, the view type, travel (actions/preview_controls.js).
   const { setRange, onLo, onHi, toggleSingle, onViewType, onToggleTravel } = makePreviewControls({
@@ -557,7 +559,7 @@ export default function Viewport({
     getWorker()?.postMessage({ cmd: 'paintMode', overhangDeg: overhangOnly ? overhangAngle : 0 })
   }, [overhangOnly, overhangAngle, paintMode])   // eslint-disable-line react-hooks/exhaustive-deps
   // Stage 27 S4: filament colors/count + per-object print toggle + painting gizmo mode
-  function refreshObjects() { setObjects(objectRows(objectsRef.current, apiRef.current)); checkBed() }
+  function refreshObjects() { publishObjects(objectRows(objectsRef.current, apiRef.current)); checkBed() }
 
   // ---- Undo/redo, viewport scope (use_viewport_history.js; history.js holds the reasoning and the boundary) ----
   const { depth: historyDepth, record: recordHistory, travel: travelHistory } = useViewportHistory({
@@ -797,7 +799,8 @@ export default function Viewport({
 
           {ok && showPanel('plateBar') && (
             <PlateBar plateCount={plateCount} selectedPlate={selectedPlate} maxPlates={MAX_PLATES} overridePlates={overridePlates}
-              plateRun={plateRun} onSelect={selectPlate} onAdd={addPlate} onDelete={deletePlate} />
+              plateRun={plateRun} slicing={slicing || Object.values(plateRun?.plates ?? {}).some(plate => plate.state === 'busy')}
+              onSelect={selectPlate} onAdd={addPlate} onDelete={deletePlate} />
           )}
 
           {ok && showPanel('status') && <div className="vp-status" data-testid="vp-status"><VersionBadge on={feature('versionBadge')} />{status}</div>}

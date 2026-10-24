@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { uiTreeKeys } from 'three-slicer-viewer/data'
+import { leanSchema, uiTreeKeys } from 'three-slicer-viewer/data'
 import { paintedFacetCount } from './MaterialPaintPanel.jsx'
 import { cardScope } from '../core/plate_settings.js'
 import ScopeToggle from './ScopeToggle.jsx'
 import { resolveCatalog } from '../core/catalog.js'
 import { MAX_PAINT_EXTRUDERS } from '../core/viewer_defaults.js'
+import { projectFilamentVectorSettings, writeFilamentVectorSettings } from '../core/filament_vector_settings.js'
 
 // What a material owns: every option upstream puts on the filament tab, not just the ten the kernel reads.
 //  Saving only the kernel keys would silently drop the rest of the user's edits from the panel below, and the
@@ -216,37 +217,32 @@ export default function FilamentCard({
     if (first) setSettings?.(prev => applyAt(active, first.name, prev), forceFilament())
   }
 
-  // The settings form edits one value per key; with several extruders loaded that would flatten the column and
-  //  drop the other tools' materials. So the form sees the selected extruder's slice of each column, and its
-  //  edits are written back at that index. Passing `filamentPanel` as a function is what makes that possible —
-  //  a ready-made node is already bound to the host's own settings pair.
-  const project = (map) => {
-    if (count < 2) return map
-    const view = { ...map }
-    for (const key of ownedKeys) if (Array.isArray(view[key])) view[key] = view[key][active]
-    return view
-  }
-  const setPanelSettings = (updater) => setSettings?.(prev => {
-    const before = project(prev)
-    const after = typeof updater === 'function' ? updater(before) : updater
-    if (count < 2) return after
-    const next = { ...prev }
-    for (const key of Object.keys(after)) {
-      if (JSON.stringify(after[key]) === JSON.stringify(before[key])) continue
-      if (!ownedKeys.includes(key)) { next[key] = after[key]; continue }
-      const column = Array.isArray(prev[key]) ? [...prev[key]] : Array.from({ length: count }, () => null)
-      column[active] = scalarOf(after[key])
-      next[key] = column
-    }
-    for (const key of Object.keys(before)) {          // a per-option reset removes the key -> clear this extruder
-      if (key in after || !ownedKeys.includes(key)) continue
-      const column = Array.isArray(prev[key]) ? [...prev[key]] : Array.from({ length: count }, () => null)
-      column[active] = null
-      if (column.every(v => v == null)) delete next[key]; else next[key] = column
-    }
-    return next
+  // The form edits scalar values, while the material owns vector columns. Project only the numeric owned keys
+  // and write their edits back into the selected column without disturbing siblings or vendor tails.
+  const projection = projectFilamentVectorSettings({
+    settings: settings ?? {}, ownedKeys, activeIndex: active, slotCount: count,
+    preset: preset ?? {}, schema: leanSchema,
   })
-  const panel = typeof filamentPanel === 'function' ? filamentPanel(project(settings ?? {}), setPanelSettings) : filamentPanel
+  const setPanelSettings = (updater) => setSettings?.(prev => {
+    const before = projectFilamentVectorSettings({
+      settings: prev ?? {}, ownedKeys, activeIndex: active, slotCount: count,
+      preset: preset ?? {}, schema: leanSchema,
+    }).settings
+    const after = typeof updater === 'function' ? updater(before) : updater
+    return writeFilamentVectorSettings(prev ?? {}, before, after, {
+      ownedKeys, vectorKeys: projection.editableKeys, activeIndex: active, slotCount: count,
+      resetValues: projection.resetValues, resetOnDelete: !plateScope,
+    })
+  })
+  const ownerMeta = {
+    scope: plateScope ? 'plate' : 'global', selectedPlate, activeIndex: active, slotCount: count,
+    editableKeys: projection.editableKeys, resetValues: projection.resetValues,
+    overriddenKeys: scoped.overriddenKeys, onRevertKey: scoped.onRevertKey,
+    contextKey: `filament-${plateScope ? `plate-${selectedPlate}` : 'global'}-${active}`,
+  }
+  const panel = typeof filamentPanel === 'function'
+    ? filamentPanel(projection.settings, setPanelSettings, ownerMeta)
+    : filamentPanel
 
   const label = name => (name ? name.replace(/\s*@.*$/, '') : '—')
 

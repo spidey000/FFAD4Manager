@@ -89,6 +89,8 @@ export function createBoxSelect({ camera, domElement, mount }) {
       drag = null
       return picked
     },
+    /** Aborts the drag without selecting: cancellation is not a box the user finished drawing. */
+    cancel: () => { drag = null; band.style.display = 'none' },
     dispose: () => { band.remove() },
   }
 }

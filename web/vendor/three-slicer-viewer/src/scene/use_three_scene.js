@@ -8,6 +8,7 @@ import { buildMergedSTL, exportObjects } from '../core/model_geometry.js'; impor
 import { buildOverhangGeometry } from './overhang_view.js'; import { makeNozzleMarker } from './nozzle_marker.js'; import { rebuildPlates, followPlateLayout, refitCameraToPlates } from './plate_scene.js'
 import { createScaleBox, clampMeshScale } from './scale_box.js'
 import { createBoxSelect } from './box_select.js'
+import { createGestureArbiter } from './gesture_arbiter.js'
 import { createPaintInput } from './paint_input.js'
 import { createSectionPlane } from './section_plane.js'
 import { DEFAULT_BED, DEFAULT_FILAMENT_COLORS } from '../core/viewer_defaults.js'
@@ -316,6 +317,7 @@ export function useThreeScene(deps) {
         : hovered ? 'pointer' : ''
     }
     const onMove = ev => {
+      gesture.move(ev.pointerId, ev.clientX, ev.clientY)
       if (canvasModeRef.current === 'preview') return   // S2: no hover/selection in preview
       if (boxSelect.dragging()) { boxSelect.move(ev); return }
       if (scaleBox.dragging()) { scaleBox.move(ev); invalidate(); return }
@@ -349,17 +351,23 @@ export function useThreeScene(deps) {
       announceSelection()
     }
 
-    // Press position + the plate under it, resolved on release: a left-drag over the beds is how you orbit, so
-    //  switching plates on press would change plate every time the camera moves. Only a press that does not travel
-    //  counts as a click.
-    let downAt = null, downPlate = null
+    // Press position + plate are resolved on release: only a tap selects; an orbit never changes the selection.
+    const gesture = createGestureArbiter()
+    let down = null   // the candidate tap: {id, hit, plate, ctrl}
     const onDown = ev => {
       if (ev.button !== 0) return                       // left click only — right/middle clicks belong to OrbitControls pan/zoom (prevents stray selection/painting)
-      // S2: no gizmo/painting in preview — but a click still selects the plate (onUp resolves it). The objects are
-      //  hidden there, so the plate comes from the bed plane, not a picked mesh.
+      const press = gesture.press(ev.pointerId, ev.clientX, ev.clientY, ev.timeStamp)
+      // A second finger owns the camera: end the valid part of the stroke, never paint where the new finger landed,
+      //  and drop the tap candidate so the eventual release cannot select. Paint resumes only on a fresh contact.
+      if (press.second) {
+        down = null
+        if (paintDrawingRef.current) { paintDrawingRef.current = false; paintInput.endStroke(); orbit.enabled = true }
+        return
+      }
+      // S2: no gizmo/painting in preview — a tap still selects the plate (onUp); objects are hidden, so it comes from the bed plane.
       if (canvasModeRef.current === 'preview') {
         toPointer(ev)
-        downAt = { x: ev.clientX, y: ev.clientY }; downPlate = plateUnderPointer(null)
+        down = { id: ev.pointerId, hit: null, plate: plateUnderPointer(null), ctrl: false }
         return
       }
       if (paintModeRef.current !== 'off') {
@@ -367,42 +375,45 @@ export function useThreeScene(deps) {
         //  :833) and the canvas orbits, which is how a brush survives a camera move. OrbitControls' own pointerdown
         //  listener is registered first and has already begun its drag, so this only decides whether to kill it.
         if (!paintInput.hitsModel(ev)) return
-        paintDrawingRef.current = true; orbit.enabled = false
+        paintDrawingRef.current = true; orbit.enabled = false; gesture.claim('painting')
         paintInput.beginStroke(ev); paintInput.paintAt(ev, { erase: ev.shiftKey }); return
       }
-      // Before the gizmo guard and before the model is picked: a handle grab must beat both the gizmo axis it may
-      //  overlap and the part it sits on top of. Pointer capture keeps the drag alive outside the canvas.
+      // A handle grab beats the gizmo axis it may overlap and the part under it; capture keeps the drag alive outside.
       if (!transform.dragging && gizmoMode === 'scale' && scaleBoxTarget()) {
         toPointer(ev); raycaster.setFromCamera(pointer, camera)
         if (scaleBox.hitTest(raycaster) && scaleBox.begin(ev, scaleBoxTarget())) {
-          deps.onTransformStarted?.(); deps.onPaintDragStart?.()
+          deps.onTransformStarted?.(); deps.onPaintDragStart?.(); gesture.claim('transforming')
           orbit.enabled = false
           renderer.domElement.setPointerCapture?.(ev.pointerId)
           return
         }
       }
-      if (transform.dragging || transform.axis) return
+      if (transform.dragging || transform.axis) { gesture.claim('transforming'); return }
       // Shift+drag starts a box select instead of an orbit. Upstream gates this on the painting gizmos being off
       //  (GLCanvas3D.cpp:4398) for the same reason it matters here: shift is the eraser modifier while painting.
       if (ev.shiftKey && paintModeRef.current === 'off') {
-        boxSelect.begin(ev)
+        boxSelect.begin(ev); gesture.claim('transforming')
         orbit.enabled = false
         renderer.domElement.setPointerCapture?.(ev.pointerId)
         return
       }
       toPointer(ev)
       const hit = pick()
-      downAt = { x: ev.clientX, y: ev.clientY }; downPlate = plateUnderPointer(hit)
-      if (hit) {
-        // Ctrl/⌘ toggles; a plain click on something already selected leaves the set alone so the whole set can be
-        //  dragged. Both are upstream's rules — `add(idx, !ctrl_down, true)` plus the already-selected branch.
-        if (ev.ctrlKey || ev.metaKey) toggleSelect(hit)
-        else if (!selection.has(hit)) selectOnly(hit)
-      } else if (!ev.shiftKey) clearSelection()
-      announceSelection()
+      down = { id: ev.pointerId, hit, plate: plateUnderPointer(hit), ctrl: ev.ctrlKey || ev.metaKey }
     }
     // Paint release is handled on window — so releasing the button outside the canvas cannot leave paintDrawing/orbit.enabled stuck.
     const onUp = (ev) => {
+      const { tap } = gesture.release(ev.pointerId, ev.clientX, ev.clientY, ev.timeStamp)
+      // Cancellation aborts the gesture: no selection, no band, no committed scale. Restore the camera and the brush.
+      if (ev.type === 'pointercancel') {
+        down = null
+        if (boxSelect.dragging()) boxSelect.cancel()
+        if (scaleBox.dragging()) { scaleBox.end(); transform.enabled = true }
+        orbit.enabled = true
+        if (paintDrawingRef.current) { paintDrawingRef.current = false; paintInput.endStroke() }
+        invalidate()
+        return
+      }
       if (boxSelect.dragging()) { endBand(); return }
       // A corner drag commits the same way a gizmo drag does — re-seat on the bed, then let the component rebuild
       //  the paint/kernel coordinates the new size invalidates.
@@ -416,13 +427,14 @@ export function useThreeScene(deps) {
         invalidate()
         return
       }
-      // A press that stayed put is a click: select the plate it landed on. 4px of slop covers the wobble of a
-      //  physical click without letting an orbit drag through.
-      if (downAt) {
-        const still = Math.abs((ev?.clientX ?? downAt.x) - downAt.x) < 4 && Math.abs((ev?.clientY ?? downAt.y) - downAt.y) < 4
-        if (still && downPlate != null) deps.onPlateClicked?.(downPlate)
-        downAt = null; downPlate = null
+      // A tap — quick and still — selects, never the press that started an orbit. Ctrl/⌘ toggles; an already-selected hit stays in the set.
+      if (tap && down) {
+        const { hit, plate, ctrl } = down
+        if (plate != null) deps.onPlateClicked?.(plate)
+        if (hit) { if (ctrl) toggleSelect(hit); else if (!selection.has(hit)) selectOnly(hit); announceSelection() }
+        else if (canvasModeRef.current !== 'preview') { clearSelection(); announceSelection() }
       }
+      down = null
       if (!paintDrawingRef.current) return
       paintDrawingRef.current = false; orbit.enabled = true
       paintInput.endStroke()   // flushes the pending sample: the last position is the one the user aimed at

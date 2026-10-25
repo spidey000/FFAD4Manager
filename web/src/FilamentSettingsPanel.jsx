@@ -1,5 +1,7 @@
 import React from 'react'
-import SettingsPanel, { schema as fullSchema, toggle, uiTree as fullUiTree } from 'three-slicer/components'
+import SettingsPanel from 'three-slicer-viewer/components'
+import { schema as fullSchema, uiTree as fullUiTree } from 'three-slicer/data'
+import { makeCfg, disabledKeys } from 'three-slicer/toggle'
 
 const FILAMENT_BUILDERS = ['TabFilament::build', 'TabFilament::add_filament_overrides_page']
 
@@ -24,6 +26,7 @@ function collectFilamentTree() {
 }
 
 const FILAMENT_DATA = collectFilamentTree()
+const panelData = { schema: FILAMENT_DATA.schema, uiTree: FILAMENT_DATA.tree, toggle: { makeCfg, disabledKeys } }
 const has = (object, key) => Object.prototype.hasOwnProperty.call(object ?? {}, key)
 
 function ownerForPanel(projectedSettings, ownerMeta) {
@@ -53,9 +56,7 @@ export default function FilamentSettingsPanel({ settings, setSettings, ownerMeta
   return <div className="filament-settings-panel" data-testid="filament-advanced-settings" data-filament-slot={ownerMeta?.activeIndex ?? ''}>
     {activeSlot && <div className="sc-info"><span>Advanced for</span><strong>T{activeSlot}</strong></div>}
     <p className="sc-note">T rows are logical filament slots, not physical nozzles.</p>
-    {ownerMeta?.scope === 'plate' && <p className="sc-note">Editing snapshots this plate’s complete effective filament vector.</p>}
-    <SettingsPanel schema={FILAMENT_DATA.schema} uiTree={FILAMENT_DATA.tree} toggle={toggle} settings={settings}
-      setSettings={setSettings} embedded overriddenKeys={vectorOwner.overriddenKeys} onRevertKey={vectorOwner.onRevertKey}
-      draftContextKey={vectorOwner.contextKey} vectorOwner={vectorOwner} />
+    <SettingsPanel {...panelData} settings={settings}
+      setSettings={setSettings} embedded overriddenKeys={vectorOwner.overriddenKeys} onRevertKey={vectorOwner.onRevertKey} />
   </div>
 }

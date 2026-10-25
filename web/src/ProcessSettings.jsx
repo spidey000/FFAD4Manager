@@ -1,7 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react'
-import SettingsPanel, { schema as settingsSchema } from 'three-slicer/components'
+import SettingsPanel from 'three-slicer-viewer/components'
+import { schema as settingsSchema, uiTree } from 'three-slicer/data'
 import { printerTechnology, settingRaw } from 'three-slicer/settings'
-import { validateQuickSettingDraft } from '../vendor/three-slicer-viewer/src/core/quick_setting_draft.js'
+import { makeCfg, disabledKeys } from 'three-slicer/toggle'
+
+const panelData = { schema: settingsSchema, uiTree, toggle: { makeCfg, disabledKeys } }
 
 const QUICK_FIELDS = [
   { key: 'layer_height', type: 'coFloat', label: 'Layer height', unit: 'mm', inputMode: 'decimal' },
@@ -38,7 +41,12 @@ function QuickNumberField({ setting, settings, setSettings, overridden, onRevert
 
   function commit() {
     if (draft === committed.current) return
-    const result = validateQuickSettingDraft(draft, definition)
+    const parsed = Number(String(draft).replace(',', '.').replace(/\s*%$/, ''))
+    const integer = definition.type === 'coInt'
+    const result = !draft.trim() || !Number.isFinite(parsed) || (integer && !Number.isInteger(parsed))
+      ? { valid: false, reason: !draft.trim() ? 'blank' : integer && Number.isFinite(parsed) && !Number.isInteger(parsed) ? 'integer_required' : 'invalid' }
+      : parsed < Number(definition.min) ? { valid: false, reason: 'below_min' }
+        : parsed > Number(definition.max) ? { valid: false, reason: 'above_max' } : { valid: true, value: parsed }
     if (!result.valid) {
       errorPresent.current = true
       setError(validationMessage(result, definition))
@@ -111,7 +119,7 @@ export default function ProcessSettings({ settings, setSettings, scopeMeta }) {
     <details className="process-advanced" open={advancedOpen} onToggle={event => setAdvancedOpen(event.currentTarget.open)}>
       <summary>Advanced settings</summary>
       <div className="process-advanced-body">
-        <SettingsPanel settings={settings} setSettings={setSettings} embedded
+          <SettingsPanel {...panelData} settings={settings} setSettings={setSettings} embedded
           overriddenKeys={scopeMeta?.overriddenKeys} onRevertKey={scopeMeta?.onRevertKey} draftContextKey={draftContextKey} />
       </div>
     </details>

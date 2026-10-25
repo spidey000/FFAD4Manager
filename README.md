@@ -204,7 +204,18 @@ The Adventurer 4 exposes a legacy FlashForge TCP service on port `8899`. Command
 ~M119\r\n
 ```
 
-Useful commands confirmed:
+Protocol evidence is limited to one Adventurer 4 unit/firmware: replies and
+reported state do not establish universal firmware behavior or physical effect.
+Read-only queries (including status, M114/M115, M661 and M662) responded;
+M662 returned a complete BMP. Supervised tests also observed M106/M107 fan
+effects and transitions for M24/M25/M26, but the print-control test stayed at
+`0/100`, and small movement probes were not visually resolved. M104 ACKs and
+changing current-temperature telemetry did not confirm a nozzle setpoint. Upload
+listing does not verify file contents, and an earlier upload path preceded
+unexpected execution. See the [evidence catalog](docs/PRINTER-COMMANDS.md) for
+the hardware-confirmed, partial, static-only, and do-not-probe classifications.
+
+Commands present in the client/protocol:
 
 | Command | Purpose |
 | --- | --- |

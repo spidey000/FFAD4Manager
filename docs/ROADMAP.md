@@ -10,36 +10,29 @@
 - [x] Pause/resume/cancel
 - [x] Watch mode
 - [x] Safer printing checks
+- [x] UDP printer discovery
+- [x] Camera URL/browser launch/JPEG snapshot commands
 
 ## v0.3 Protocol hardening
 
 - [ ] Better parser for binary-ish file list response
 - [ ] Delete file command discovery
-- [ ] Firmware/version info
+- [x] Firmware/version info
 - [ ] Printer capability detection
 - [ ] Upload verification
 - [ ] Integration test harness using captured printer responses
 
 ## v0.4 Orca integration
 
-- [ ] Document OrcaSlicer post-processing setup
-- [ ] Export helper with config file
-- [ ] Optional automatic upload/start
+- [x] Document OrcaSlicer post-processing setup
+- [x] Export helper with config file
+- [x] Optional automatic upload/start
 - [ ] Safe prompt mode before start
 
-## v1.0 macOS app
+## v1.0 CLI
 
-See `macos/` for the native SwiftUI app (protocol ported to Swift in `AD4ConnectKit`).
-
-- [x] SwiftUI app shell
-- [x] Status panel
-- [x] File browser
-- [x] Upload (file picker; drag/drop still to do)
-- [x] Start/pause/resume/cancel
-- [x] Preference storage (shares `~/.config/ad4connect/config.ini` with the CLI)
-- [x] Packaged `.app` (via `macos/build_app.sh`; Xcode Archive for signed builds)
-- [x] Printer discovery (UDP multicast/broadcast)
-- [x] Webcam view (MJPEG stream from the built-in camera)
-- [ ] Drag/drop upload
-- [ ] App icon
-- [ ] Code signing / notarization
+- [ ] Stable, documented command-line workflows for Linux terminals and AI agents
+- [ ] Safer upload verification and clearer recovery guidance
+- [ ] Broader printer/firmware compatibility
+- [ ] Improve discovery reporting and compatibility across printer firmware
+- [ ] Add camera options such as configurable snapshot limits/timeouts

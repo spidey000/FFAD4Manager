@@ -1,7 +1,10 @@
 # Acceso remoto protegido para Three_Slicer
 
 Este documento describe la configuración prevista para `https://slicerweb.gg0099.top`.
-**No afirma que el túnel, DNS o la aplicación Cloudflare Access ya estén configurados.**
+Estado verificado el 2026-10-25: DNS proxied, ingress del túnel y app Access
+con política humana `Allow` configurados; el bridge exige JWT de Access. La
+política `Service Auth` del bot queda pendiente de rotar el token expuesto. El
+inicio de sesión humano autorizado aún requiere verificación desde navegador.
 
 ## Configurar Cloudflare
 

@@ -4,17 +4,18 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-.DS_Store
 .pytest_cache/
 .ruff_cache/
+.local/
+.env
+.env.*
+!.env.example
 AGENTS.md
+.slim/deepwork/
 /config.ini
 /ffadv4manager/config.ini
 /.config/ffadv4manager/config.ini
 /.ffadv4manager/config.ini
-
-# Swift / SwiftPM (macos app)
-.build/
-.swiftpm/
-*.xcodeproj
-Package.resolved
+/TEST_LOG.md
+/test.gcode
+/test-upload.jsonl

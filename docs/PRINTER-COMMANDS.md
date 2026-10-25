@@ -13,7 +13,37 @@ transcript, test G-code, inert probe, and local test log are not distributed in
 this catalog. No undocumented command is presented as confirmed merely because
 it appears in test code or a G-code file.
 
-## Evidence labels
+## Evidence classes
+
+The classes below separate a response/ACK, telemetry, and an independently
+observed physical effect. All live evidence is from one Adventurer 4 reporting
+firmware `v2.2.4`; it is not a compatibility guarantee for other units or
+firmware. A protocol ACK alone is never proof of the described effect.
+
+### Hardware-confirmed responses/effects
+
+Includes read-only responses and supervised physical effects explicitly
+observed by the user. For movement and print controls, distinguish device
+reported state from independently observed physical behavior.
+
+### Partial or telemetry-only
+
+The device replied or its state/telemetry changed, but the intended setting,
+stored data, or physical effect is not fully established. This includes ACK-only
+and status-only evidence.
+
+### Static-only/unverified
+
+Supported only by client/FlashPrint signatures, firmware strings, or offline
+analysis; no AD4 acceptance/effect was established on hardware.
+
+### Not tested / do not probe
+
+No live test was made and exploratory probing is not recommended because the
+command may move, heat, interrupt, alter configuration, release control, or
+affect firmware/boot state. Resolve via offline analysis or an isolated bench.
+
+## Evidence labels (details)
 
 - **Device response (`v2.2.4`)** — a response is present in the October 18
   device log, whose `M115` reply identifies an Adventurer 4 running firmware
@@ -54,26 +84,104 @@ separate discovery protocol, not G-code and not commands on the TCP connection.
 
 ## Printer commands
 
+The table is grouped by the strongest justified evidence class. A command can
+have a confirmed response while its intended effect remains partial.
+
+### Hardware-confirmed responses/effects
+
 | Command | Meaning in this project / response evidence | Evidence and confidence |
 |---|---|---|
-| `M601 S1` | Sent first in the current upload preamble. The observed reply was `Control Success V2.1.` followed by `ok`. | **Device response (`v2.2.4`)**; **semantics uncertain / potentially risky**. Its firmware-side effect is not authoritatively established. Do not infer that “Control Success” means it cannot affect execution state. |
-| `M115` | Firmware/device information query. Observed fields: `Machine Type`, `Machine Name`, `Firmware`, `SN` (serial number), dimensions `X`, `Y`, `Z`, `Tool Count`, and `Mac Address`, followed by `ok`. Example non-unique values were Adventurer 4, firmware `v2.2.4`, and dimensions `220 × 200 × 250`. | **Device response (`v2.2.4`)**. The raw command returns identifying fields including a serial number and MAC address; their values are deliberately not repeated here. The CLI does not parse this response into a model. |
-| `M650` | Sent in the upload preamble. The observed reply was `X: 1.0 Y: 0.5` and `ok`. | **Device response (`v2.2.4`)**; **semantics uncertain**. The meaning of these values is not established here. |
-| `M119` | Status/endstop query. The observed response included `MachineStatus: READY`, `MoveMode: READY`, empty `CurrentFile`, `Endstop: X-max:0 Y-max:0 Z-max:0`, generic flags `S:1 L:0 J:0 F:0`, and `LED: 1`. | **Device response (`v2.2.4`)**. The parser reads only `MachineStatus`, `MoveMode`, and `CurrentFile`; the endstops, flags, and LED are not separate parsed model fields or shown in CLI status. |
-| `M105` | The parser recognizes `T0:<nozzle-current>/<nozzle-target> B:<bed-current>/<bed-target>` and maps the four integer values to nozzle/bed temperatures. Observed CLI examples included nozzle `30/0 °C` and bed `26/0 °C`. | **Device-backed status query**. The raw M105 line was not retained separately, so the recognized format is implementation evidence; the observed evidence is the parsed temperature output. |
-| `M27` | Observed progress fields include `SD printing byte <current>/<total>` and `Layer: <current>/<total>`, followed by `ok`. | **Device response (`v2.2.4`)**. The parser maps the byte and layer pairs into optional integer fields; percent is computed from the byte pair, not read as a separate response field. |
-| `M114` | Read-only position query. The observed raw reply was `X:-100 Y:90 Z:19.9992 A:0 B:0` followed by `ok`. | **Directly observed.** These are raw response fields; the CLI does not parse or display them as status. Community reference: [M114](https://github.com/Parallel-7/flashforge-api-docs/wiki/TCP-Protocol#m114---current-position). |
-| `M28 <size> 0:/user/<name>` | Current upload sender declares the local byte count and destination. M28 readiness is accepted only on a standalone `ok`. | **Implemented; not directly hardware-verified for this exact argument form**. The device did answer M28 during uploads, with a response such as `Writing to file: /data/probe-1.gcode` and `ok`; the exact transmitted arguments are not recorded in the response log, and the firmware-reported `/data` namespace differs from the sender's `0:/user` namespace. |
-| Raw file payload | Current sender transmits the file's bytes in chunks between acknowledged M28 and M29, without command framing or added payload markers. | **Implemented**. Uploads were accepted and filenames appeared in M661, but this is not byte-for-byte device-side content verification. |
-| `M29` | Ends the upload. A recorded device reply was `Done saving file.` followed by `ok`. Current sender also requires a standalone `ok`. | **Device response (`v2.2.4`)**. The reply does not by itself establish exact stored content. |
-| `M661` | Requests the printer's file listing. Recorded replies included `/data/...` entries; the current upload-only path checks for the requested basename across `/data/` and `0:/user/`. | **Device response (`v2.2.4`)**. Listing a name confirms presence in the listing only; it does not establish file size or content integrity. |
-| `M662 <file_path>` | Reads a printer-side file preview/thumbnail, not the live camera. | **Directly observed.** An existing `.gx` path returned `CMD M662 Received.`, `ok`, then 14,486 binary bytes beginning with BMP signature `BM` (not PNG). Community reference: [M662](https://github.com/Parallel-7/flashforge-api-docs/wiki/TCP-Protocol#m662---get-local-file-preview). |
-| `M23 <path>` | Selects/opens a file in current `print_file()` flow. A recorded response for `test2.gcode` said `File opened: test2.gcode Size: 727`, `File selected`, `ok`. | **Device response (`v2.2.4`)**; **semantics uncertain / potentially print-starting on this unit**. The user confirmed that `test2.gcode` physically executed after an older upload flow sent M23, despite no M24 in the transcript. M23 is the leading trigger candidate, not proven causation. It is deliberately absent from upload-only paths. |
-| `M24` | Current CLI's explicit `print`/`upload --start` path sends M24 after file selection; `resume` also sends M24. | **Hardware-confirmed start and resume (`v2.2.4`)**: in the short bearing-model test, M23 selected the file and M24 was acknowledged; status showed `BUILDING_FROM_SD` / `MOVING`. After a confirmed pause, resume M24 was acknowledged; status showed `BUILDING_FROM_SD` / `MOVING` at 5 and 30 seconds after resume. Progress stayed `0/100`; this does not establish extrusion or part completion. Starting a physical print is consequential. |
-| `M25` | Current client `pause()` sends M25. | **Hardware-confirmed pause (`v2.2.4`)**: M25 was acknowledged and status reported `BUILDING_FROM_SD` / `PAUSED` five seconds later, with progress `0/100`. Resume followed five seconds after pause; the 30-second interval was after resume, not a 30-second pause. |
-| `M26` | Current client `cancel()` sends M26; the implementation describes it as cancel/reset of SD print state. | **Hardware-confirmed cancel (`v2.2.4`)**: after 30 seconds in the resumed `BUILDING_FROM_SD` / `MOVING` state, M26 was acknowledged and status returned `READY` with no current file; progress remained `0/100`. Cancel may discard an active job. |
-| `M105` | Current status path queries nozzle and bed temperatures. | **Device-backed status query.** The live `status` output parsed nozzle `30/0 °C` and bed `26/0 °C`; the raw M105 line was not retained separately. |
-| `M27` | Current status path queries print progress. A diagnostic device reply included `SD printing byte 0/100`, `Layer: 0/0`, and `ok`. | **Device response (`v2.2.4`)**. The diagnostic was not evidence of an active print being started by M27. |
+| `M119`, `M105`, `M27` / `status` | Status, temperature, and progress queries. | **Repeated hardware responses (`v2.2.4`)**: a recent read-only batch queried status (M119/M105/M27) and the raw commands. Replies are device telemetry, not physical measurement; M27 layer remained `0/0` in observed cases. |
+| `M114` | Read-only position query. | **Hardware response (`v2.2.4`)** including reported `X0 Y0 Z0`; does not independently verify physical position. |
+| `M115` | Firmware/device information query. | **Hardware response (`v2.2.4`)**. SN/MAC are redacted. M610 testing separately confirmed a temporarily changed Machine Name in M115 and restoration to `adv.gg0099`; no reboot persistence or panel check. |
+| `M610 <name>` | Sets the printer-reported machine name. | **Reversibly hardware-verified (`v2.2.4`)**: M610 changed the reported name to `REA-TEST-20261019`, then restored `adv.gg0099`; M115 confirmed both. No panel check or reboot-persistence test. |
+| `M661` | File-listing query. | **Hardware response (`v2.2.4`)**; latest batch counted 74 entries. Presence does not establish file size/content. |
+| `M662 <file_path>` | Reads a printer-side file preview/thumbnail, not the live camera. | **Directly observed**: existing `.gx` path returned a complete BMP (14,486 bytes), not PNG. |
+| Webcam HTTP snapshot | Separate HTTP/MJPEG camera endpoint, not G-code. | **Repeated hardware captures in idle**: complete JPEGs at 640×480 were captured repeatedly. This confirms response/capture, not continuous video or any control effect. |
+| `M106` / `M107` | Firmware fan controls. | **Supervised physical effect observed**: M106 activated the layer/part-cooling fan; M107 stopped it. The enclosure fan continued. No command to turn off the enclosure fan is identified. |
+| `M24` / `M25` / `M26` | Start/resume, pause, cancel/reset SD print state in this client path. | **Hardware-confirmed reported transitions**: M24 start/resume and M25 pause/M26 cancel were ACKed; status reported BUILDING/MOVING, PAUSED, then READY. Progress remained `0/100`; do not claim completed extrusion/object. M23 preceded a historical unexpected execution and is treated separately as potentially print-starting. |
+
+### Partial or telemetry-only
+
+| Command | Meaning in this project / response evidence | Evidence and confidence |
+|---|---|---|
+| `G1 X/Y/Z`, `G90`, `G91` | Small coordinate/motion probes. | **ACK and coordinate telemetry only**: reported X0→X1→X2, Z0→2, Y0→1; G90 and G1 X0/Y0/Z0 restored reported coordinates. Webcam did not resolve these small displacements; do not claim independently observed physical movement. No extrusion or feed-rate change. |
+| `G28` | Homes specified axes; without arguments may home all axes. | **ACK/state only** after user confirmed travel path clear. M114 was X0/Y0/Z0 before and after, M119 Z-min:1 before and after; webcam did not resolve movement. Not evidence of homing from off-home. |
+| `M140 S<°C>` | Requests bed target. | M140 S30 ACK; status reported 27/30 after 5 s. First S0 ACK was followed by 29/30; repeated S0 and later reads reported target 0 and cooling. Cause of delayed first target is unresolved; no independent thermometer. |
+| `M104 S<°C>` / `M104 S<°C> T0` | Requests nozzle target; FlashPrint has T0/T1 literal forms, firmware grammar unresolved. | M104 S40/S100 and S100 T0 ACKed; current M105/status rose to about 99–100 then cooled after S0. Panel showed **no target value**, M105 target remained `/0`; setpoint is not confirmed. Do not test T1 or further heating pending offline analysis. |
+| `M28`, raw upload payload, `M29` | File transfer framing/payload/finalization. | **Partial**: upload replies and file-list presence were observed, but M661 presence proves neither size nor contents. A prior upload preceded unexpected execution. Do not recommend another exploratory upload. |
+| `M23 <path>` | Select/open file in print flow. | Response observed, but potentially print-starting on this unit: `test2.gcode` execution followed a historical M23-containing flow without M24. M23 is not a query; do not probe. |
+| `M601 S1`, `M650` | Upload preamble commands. | Replies observed (`Control Success V2.1.`, and `X: 1.0 Y: 0.5`); firmware-side meanings/effects remain uncertain. Do not infer harmlessness from ACK. |
+
+### Static-only/unverified
+
+| Command | Meaning in this project / response evidence | Evidence and confidence |
+|---|---|---|
+| `M611`, `M612`, `M653`, `M654` | REA/network handler candidates. | Not dispatched by the TCP handler; no hardware acceptance established. Static evidence only. |
+| `G9`, `M118`, `M904`, `M905` | Client/FlashPrint signatures or conventional interpretations. | Client signatures only; no confirmed AD4 acceptance. |
+| IAP / STM32 update | Firmware update/bootloader paths from static reports. | No physical IAP test; do not infer hardware operation from static analysis. |
+
+### Not tested / do not probe
+
+| Command | Risk / known evidence limit | Guidance |
+|---|---|---|
+| `M17` / `M18` | Motor enable/disable implications unverified. | Do not live-probe; may change motor state. |
+| `M108` | Handler/effect unverified. | Do not live-probe; may interrupt/alter an active operation. |
+| `M112` | Emergency-stop semantics and recovery unverified. | Do not probe as a query or test. |
+| `M602` | Control-release effect unverified. | Do not live-probe; may change control ownership/state. |
+| `M144` / `M145` / `M146` | Downstream STM32 meaning unknown; M146 may toggle/configure LED. M119 reported `LED:1`, camera cannot decide LED state with certainty. | Not sent. Do not use as exploratory LED/fan toggles. |
+| `M651` / `M652` | Downstream STM32 effects unknown; enclosure-fan control not identified. | Do not live-probe. No command identified to stop enclosure fan. |
+| `M663 S<pct>` | Firmware routes it to a print-speed setter; community semantics are for newer 5M-series models. | Not sent to AD4; no AD4 behavior or safe range established. Setter, not a read query. |
+
+### Latest compatible read-only batch
+
+While idle/`READY`, a sequential read-only sweep queried `status` (M119/M105/M27),
+then raw M119/M105/M27/M114/M115, M661, and a camera snapshot. All returned
+responses; M661 parsed 74 entries. M115 serial number and MAC were redacted from
+the recorded output. These calls are compatible because they are queries; they
+were sent sequentially, not pipelined. No setters, motion, file writes, print
+control, M146, or unknown MCU-forwarded codes were included. M662's BMP preview
+was verified separately earlier.
+
+### Enclosure/case fan: control not identified
+
+The supplied REA firmware analysis only establishes that M106 forwards the
+fixed text `M106 S255` to the STM32 and M107 forwards `M107`; it does not include
+the STM32 application logic that maps those codes to outputs. In the supervised
+hardware test on this AD4, M106/M107 switched the layer/part-cooling fan while
+the already-running enclosure fan remained running. **No command to turn off the
+enclosure fan has been identified.** Do not probe with M144/M145/M146 or
+M651–M654: their STM32-side effects are unresolved. Identification requires the
+matching STM32 firmware or an isolated, instrumented bench—not trial-and-error
+on the operating printer.
+
+### Layer reporting and heating sequence (observed AD4 v2.2.4)
+
+For the full GitHub repository audit, verified command forms, and offline
+firmware-analysis plan, see [Current-layer and timelapse research](CURRENT-LAYER-RESEARCH.md).
+
+In a supervised print of the existing ~12-minute bearing file, M27 byte progress
+advanced from `0/100` through `100/100`, while the response stayed at
+`Layer: 0/0`. The user confirmed that multiple layers were physically visible.
+Treat the layer pair as unavailable for this device/job and do not use it as a
+timelapse trigger. The byte progress is usable to track overall job progress,
+but it is not a substitute for per-layer events.
+
+No official FlashForge Adventurer 4 manual, FlashPrint reference, or firmware
+note was found that defines M27's layer fields or their update behavior. The
+[official FlashForge Download Center](https://www.flashforge.com/pages/download-center)
+did not expose such documentation in this review. The
+[community TCP protocol reference for M27](https://github.com/Parallel-7/flashforge-api-docs/wiki/TCP-Protocol#m27---get-print-status)
+documents the response shape but is not an official specification and does not
+establish field accuracy during an active AD4 print. This remains a firmware
+telemetry limitation, not a parser fix established by current evidence.
+
+The same print demonstrated the printer's preheat order: the bed first approaches
+its target; the nozzle then heats to its target. Early status samples showed the
+bed warming while the nozzle remained near ambient, followed by nozzle heating
+after the bed was near `60 °C`. The user confirmed this is expected behavior on
+this printer. Allow for that wait when interpreting status; do not treat it as a
+failed nozzle heater based only on an early sample.
 
 ## What information the CLI returns
 
@@ -91,7 +199,7 @@ do not print that raw string or expose M119's endstop/flag/LED details.
 | `upload` | Displays local send progress (`sent` bytes relative to the local file's initial size) and on success prints `Uploaded and listed: 0:/user/<name>`. It collects upload-preamble/M28/M29 replies on stderr or in optional JSONL logs, then checks that M661 lists the requested basename under `/data/` or `0:/user/`. With `--start`, after this check it also prints the raw M23 and M24 replies described for `print`. | Progress measures bytes sent by the client, not confirmed printer bytes. The observed M601/M115/M650/M119 preamble replies were respectively `Control Success V2.1.` + `ok`; the M115 fields listed above; `X: 1.0 Y: 0.5` + `ok`; and M119 status. M28/M29 require standalone `ok`; M28 reported writing under `/data/` although the current sender uses `0:/user/`. Upload-only confirms listing presence only—no remote-size or content verification. |
 | `print` | Prints the raw text returned by M23 and then M24. In observed selection output, M23 reported `File opened: <filename> Size: <bytes>`, `File selected`, and `ok`; M24 returned `ok`. | For the short bearing model, M23 reported 547,871 bytes; M24 acknowledgment and following `BUILDING_FROM_SD` / `MOVING` status were hardware-observed. The current CLI does not parse these replies into a structured result. |
 | `pause`, `resume`, `cancel` | Each prints the raw reply text from M25, M24, or M26 respectively; observed replies included `ok`. | No structured result is parsed. Hardware-confirmed status transitions in the short control test were `PAUSED` after M25, `BUILDING_FROM_SD` / `MOVING` 5 and 30 seconds after resume M24, then `READY` after M26. Progress remained `0/100`; this is not evidence of extrusion or a completed object. |
-| `camera snapshot OUTPUT` | Fetches a bounded HTTP/MJPEG response, saves the first complete JPEG frame to `OUTPUT`, and on success prints the saved path only. | Physical snapshots were captured during preflight/start/pause: `/tmp/opencode/ad4-full-control-preflight-20261018.jpg`, `/tmp/opencode/ad4-full-control-started-20261018.jpg`, and `/tmp/opencode/ad4-full-control-paused-20261018.jpg` (see `TEST_LOG.md`). These are still first-frame captures, not evidence of continuous video or motion. The camera uses separate unauthenticated HTTP, not G-code/M662. |
+| `camera snapshot OUTPUT` | Fetches a bounded HTTP/MJPEG response, saves the first complete JPEG frame to `OUTPUT`, and on success prints the saved path only. | **Repeated captures hardware-verified during an active print** on AD4 firmware `v2.2.4`: spaced HTTP snapshots succeeded from print start through byte progress `100/100`. Sampled JPEGs were `640×480` and differed substantially in pixel content as the bed/head moved. This proves repeated still capture during an active print, not continuous video recording, exact per-layer timing, or a G-code trigger. Camera HTTP is separate from printer TCP/G-code/M662 and has no authentication. |
 | `camera url`, `camera open` | `url` prints the constructed stream URL without making a network request. `open` asks the system browser to open that URL and prints either a success message or a manual-open URL/error. | Neither command obtains printer telemetry; `open` behavior depends on a usable browser. The default endpoint is unauthenticated HTTP/MJPEG. |
 | `config show`, `config path` | `show` prints locally stored host, command port, timeout, camera port/path, or explains that no configuration is stored. `path` prints the active local config-file path. | Local configuration only; neither command contacts the printer. `config set`/`unset` change local config and do not return printer information. |
 

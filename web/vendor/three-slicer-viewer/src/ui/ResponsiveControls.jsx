@@ -65,7 +65,7 @@ export function ResponsiveActionSurfaces({ layout, responsiveUI, ok, sliceAction
 }
 
 export function ResponsiveNavigation({ responsiveUI, canvasMode, gcodeOnly, layerCount, enterCanvasMode }) {
-  const { compact, intermediate, inspectorOpen, setInspectorOpen, inspectorOpenButtonRef, openInspector, requestSheetSnap } = responsiveUI
+  const { compact, intermediate, inspectorOpen, setInspectorOpen, inspectorOpenButtonRef, openInspector, openSettingsSheet, requestSheetSnap } = responsiveUI
   const onLayers = event => {
     if (!layerCount) return
     const root = event.currentTarget.getRootNode()
@@ -77,7 +77,7 @@ export function ResponsiveNavigation({ responsiveUI, canvasMode, gcodeOnly, laye
     }))
   }
   return <>
-    {compact && <MobileNavigation canvasMode={canvasMode} inspectorOpen={inspectorOpen} canPrepare={!gcodeOnly} canPreview={layerCount > 0} onPrepare={() => { if (!gcodeOnly) enterCanvasMode('prepare'); setInspectorOpen(false); requestSheetSnap('collapsed') }} onSettings={() => { setInspectorOpen(true); requestSheetSnap('half') }} onLayers={onLayers} />}
+    {compact && <MobileNavigation canvasMode={canvasMode} inspectorOpen={inspectorOpen} canPrepare={!gcodeOnly} canPreview={layerCount > 0} onPrepare={() => { if (!gcodeOnly) enterCanvasMode('prepare'); setInspectorOpen(false); requestSheetSnap('collapsed') }} onSettings={() => { setInspectorOpen(true); openSettingsSheet() }} onLayers={onLayers} />}
     {intermediate && <IntermediateInspectorControls open={inspectorOpen} openButtonRef={inspectorOpenButtonRef} onOpen={openInspector} onScrim={() => setInspectorOpen(false)} />}
   </>
 }

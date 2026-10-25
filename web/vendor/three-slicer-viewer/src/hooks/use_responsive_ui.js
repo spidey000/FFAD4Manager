@@ -34,12 +34,16 @@ export function useResponsiveUI(layout, appBodyRef) {
   const [actionSurfaceNode, setActionSurfaceNode] = useState(null)
   const actionSurfaceRef = useCallback(node => setActionSurfaceNode(node), [])
   const [workspaceSize, setWorkspaceSize] = useState({ height: 0, actionHeight: 0 })
+  const lastUsefulSnapRef = useRef('half')
   const effectiveSnap = effectiveSheetSnap(sheetSnap, layout.short, shortEditing)
   const sheetStops = sheetSnapHeights(workspaceSize.height, workspaceSize.actionHeight)
   const sceneHeight = workspaceSize.height - workspaceSize.actionHeight - (dragSheetHeight ?? sheetStops[effectiveSnap])
   // A strip shorter than 148px cannot hold the floating toolbar plus the bottom status/plate chrome without
   //  overlap; while the sheet is open there, the sheet is the focus and the scene keeps only the canvas.
   const hideSceneChrome = layout.variant === 'compact' && sceneHeight < 148
+  // Settings reopens where the user last left a non-collapsed sheet; collapsing to the scene must not
+  //  throw that preference away.
+  useEffect(() => { if (effectiveSnap !== 'collapsed') lastUsefulSnapRef.current = effectiveSnap }, [effectiveSnap])
   const sheetStyle = layout.variant === 'compact' ? {
     '--sheet-collapsed': `${sheetStops.collapsed}px`,
     '--sheet-half': `${sheetStops.half}px`,
@@ -131,6 +135,7 @@ export function useResponsiveUI(layout, appBodyRef) {
     if (suppressHandleClickRef.current) { suppressHandleClickRef.current = false; event.preventDefault(); return }
     stepSheet()
   }
+  function openSettingsSheet() { requestSheetSnap(lastUsefulSnapRef.current) }
   function openInspector() {
     restoreFocusRef.current = inspectorOpenButtonRef.current
     setInspectorOpen(true)
@@ -140,7 +145,7 @@ export function useResponsiveUI(layout, appBodyRef) {
     compact: layout.variant === 'compact', intermediate: layout.variant === 'intermediate',
     inspectorOpen, setInspectorOpen, expandedInspectorOpen, setExpandedInspectorOpen, hideSceneChrome,
     sheetSnap, requestSheetSnap, stepSheet, returnToScene, effectiveSnap, sheetStyle, dragging: dragSheetHeight != null,
-    inspectorOpenButtonRef, inspectorDialogRef, actionSurfaceRef, onModalKeyDown, openInspector,
+    inspectorOpenButtonRef, inspectorDialogRef, actionSurfaceRef, onModalKeyDown, openInspector, openSettingsSheet,
     beginSheetDrag, moveSheetDrag, finishSheetDrag, cancelSheetDrag, handleSheetClick,
   }
 }

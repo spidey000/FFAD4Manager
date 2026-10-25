@@ -59,6 +59,16 @@ function App() {
       setSettings(current => {
         let next = applyPreset(current, processes.settingsFor(processName), processes.keys)
         if (filamentName) next = applyPreset(next, filaments.settingsFor(filamentName), filaments.keys)
+        next = {
+          ...next,
+          filament_type: ['PLA'],
+          filament_vendor: ['Artillery'],
+          filament_flow_ratio: [1.0],
+          nozzle_temperature: [210],
+          nozzle_temperature_initial_layer: [210],
+          hot_plate_temp: [55],
+          hot_plate_temp_initial_layer: [55],
+        }
         return next
       })
       if (!filamentName) {

@@ -70,7 +70,8 @@ export default function StatsCard({ stats, overBed, overBedText, overBedModel = 
         </div>
       )}
       {typeof stats.timeSec === 'number' && stats.timeSec > 0 && (<>
-        <div data-testid="print-time">⏱ Estimated print <b>{hms(stats.timeSec)}</b></div>
+        <div data-testid="print-time">⏱ Slicer estimate <b>{hms(stats.timeSec)}</b></div>
+        <div className="sc-sub" data-testid="print-time-note">Printer warm-up and cooldown may add wall-clock time.</div>
         {stats.limits && (
           // What the estimator actually ran with, echoed back by the kernel — not re-derived from the settings,
           //  so an unwired limit shows up as a mismatch here instead of being silently reported as applied.

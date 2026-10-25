@@ -577,3 +577,8 @@
 .app-shell[data-layout="compact"] .auto-slice input { width: 20px; height: 20px; margin: 0; }
 .app-shell[data-layout="compact"] .vp-status { right: 86px; bottom: 48px; }
 .app-shell:not([data-layout="compact"]) .vp-status { right: 90px; padding-right: 78px; }
+.app-shell[data-layout="compact"][data-scene-chrome-hidden] .vp-top-toolbar,
+.app-shell[data-layout="compact"][data-scene-chrome-hidden] .vp-status,
+.app-shell[data-layout="compact"][data-scene-chrome-hidden] .plate-bar,
+.app-shell[data-layout="compact"][data-scene-chrome-hidden] .stats-card,
+.app-shell[data-layout="compact"][data-scene-chrome-hidden] .bed-warn { display: none; }

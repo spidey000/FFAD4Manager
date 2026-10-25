@@ -36,6 +36,10 @@ export function useResponsiveUI(layout, appBodyRef) {
   const [workspaceSize, setWorkspaceSize] = useState({ height: 0, actionHeight: 0 })
   const effectiveSnap = effectiveSheetSnap(sheetSnap, layout.short, shortEditing)
   const sheetStops = sheetSnapHeights(workspaceSize.height, workspaceSize.actionHeight)
+  const sceneHeight = workspaceSize.height - workspaceSize.actionHeight - (dragSheetHeight ?? sheetStops[effectiveSnap])
+  // A strip shorter than 148px cannot hold the floating toolbar plus the bottom status/plate chrome without
+  //  overlap; while the sheet is open there, the sheet is the focus and the scene keeps only the canvas.
+  const hideSceneChrome = layout.variant === 'compact' && sceneHeight < 148
   const sheetStyle = layout.variant === 'compact' ? {
     '--sheet-collapsed': `${sheetStops.collapsed}px`,
     '--sheet-half': `${sheetStops.half}px`,
@@ -134,7 +138,7 @@ export function useResponsiveUI(layout, appBodyRef) {
 
   return {
     compact: layout.variant === 'compact', intermediate: layout.variant === 'intermediate',
-    inspectorOpen, setInspectorOpen, expandedInspectorOpen, setExpandedInspectorOpen,
+    inspectorOpen, setInspectorOpen, expandedInspectorOpen, setExpandedInspectorOpen, hideSceneChrome,
     sheetSnap, requestSheetSnap, stepSheet, returnToScene, effectiveSnap, sheetStyle, dragging: dragSheetHeight != null,
     inspectorOpenButtonRef, inspectorDialogRef, actionSurfaceRef, onModalKeyDown, openInspector,
     beginSheetDrag, moveSheetDrag, finishSheetDrag, cancelSheetDrag, handleSheetClick,

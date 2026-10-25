@@ -711,7 +711,7 @@ export default function Viewport({
         shortcut a host application is likely to own as well (text fields, its own editor), so it must not leak out
         of the viewer — an element listener only fires when focus is inside, which is exactly the rule wanted. The
         canvas is given a tabIndex below so that clicking it counts as being inside. */}
-    <div ref={shellRef} className="app-shell" data-layout={layout.variant} data-short={layout.short || undefined} data-inspector-open={inspectorOpen || undefined} data-sidebar-open={expandedInspectorOpen || undefined} data-sheet={effectiveSnap} data-dragging={responsiveUI.dragging || undefined} onKeyDown={event => { onShellKey(event); onModalKeyDown(event) }}>
+    <div ref={shellRef} className="app-shell" data-layout={layout.variant} data-short={layout.short || undefined} data-scene-chrome-hidden={responsiveUI.hideSceneChrome || undefined} data-inspector-open={inspectorOpen || undefined} data-sidebar-open={expandedInspectorOpen || undefined} data-sheet={effectiveSnap} data-dragging={responsiveUI.dragging || undefined} onKeyDown={event => { onShellKey(event); onModalKeyDown(event) }}>
       {/* Shared hidden file input */}
       <input ref={fileInputRef} type="file" accept={PICKER_EXT.map(e => '.' + e).join(',')} multiple onChange={e => { recordHistory(); onFiles(e) }} title={`${EXT_LABEL} (multiple files allowed)`} data-testid="stl-input" style={{ display: 'none' }} />
       <input ref={presetInputRef} type="file" accept={PRESET_ACCEPT}

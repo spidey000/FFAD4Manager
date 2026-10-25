@@ -8,7 +8,11 @@ export function deriveResponsiveLayout(width, height, inspectorWidth = 320, comp
 
 export function sheetSnapHeights(availableHeight, actionHeight = 148) {
   const collapsed = Math.min(64, availableHeight)
-  const half = Math.max(collapsed, Math.min(availableHeight * 0.52, availableHeight - actionHeight - 180))
+  const preferredHalf = availableHeight * 0.52
+  const sceneReservedHalf = availableHeight - actionHeight - 180
+  // Keep the 180px viewer reserve only while it still leaves a usable half sheet. On short workspaces that
+  //  reserve would crush the settings scroll port to a sliver, so keep the 52% target instead.
+  const half = Math.max(collapsed, sceneReservedHalf >= 160 ? Math.min(preferredHalf, sceneReservedHalf) : preferredHalf)
   const expanded = Math.max(collapsed, availableHeight - actionHeight)
   return { collapsed, half, expanded }
 }

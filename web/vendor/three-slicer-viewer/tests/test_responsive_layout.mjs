@@ -28,16 +28,20 @@ test('sheet release selects the nearest stop and only lets a fast fling bias one
 
 test('sheet stops use the measured action surface and reserve visible scene space when possible', () => {
   const compact = sheetSnapHeights(370, 72)
-  assert.deepEqual(compact, { collapsed: 64, half: 118, expanded: 298 })
-  assert.equal(370 - 72 - compact.half, 180)
+  assert.deepEqual(compact, { collapsed: 64, half: 192.4, expanded: 298 })
+  assert.ok(compact.half >= 160)
+  assert.ok(370 - 72 - compact.half < 180)
   assert.equal(370 - 72 - compact.expanded, 0)
+  const reserved = sheetSnapHeights(600, 120)
+  assert.deepEqual(reserved, { collapsed: 64, half: 300, expanded: 480 })
+  assert.equal(600 - 120 - reserved.half, 180)
   assert.equal(snapSheetHeight(70, 0, 370, 72), 'collapsed')
   assert.equal(snapSheetHeight(205, 0, 370, 72), 'half')
   assert.equal(snapSheetHeight(70, 0.61, 370, 72), 'half')
   assert.equal(snapSheetHeight(294, -0.61, 370, 72), 'half')
 
   const tooShort = sheetSnapHeights(200, 50)
-  assert.deepEqual(tooShort, { collapsed: 64, half: 64, expanded: 150 })
+  assert.deepEqual(tooShort, { collapsed: 64, half: 104, expanded: 150 })
 })
 
 test('short-height editing expands temporarily without replacing the taller snap preference', () => {

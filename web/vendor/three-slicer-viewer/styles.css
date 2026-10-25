@@ -51,11 +51,16 @@
 
 /* Center viewport column */
 .viewport-col { position: relative; flex: 1 1 auto; min-width: 0; background: var(--_dark-surface); }
-.vp-top-toolbar { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center;
-  gap: 3px; background: rgba(var(--_dark-base-rgb), .85); padding: 4px; border-radius: 9px; border: 1px solid var(--_dark-border); z-index: 3;
-  /* Stage 33: more buttons. flex-wrap collapses the shrink-to-fit width of an absolutely positioned box (measured 848 -> 424px),
-     folding into two rows even when everything fits. Keep one row and let narrow viewports scroll horizontally instead. */
-  max-width: calc(100% - 24px); overflow-x: auto; scrollbar-width: none; }
+.vp-toolbar-wrap { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 3; display: flex;
+  max-width: calc(100% - 24px); }
+.vp-top-toolbar { display: flex; align-items: center; min-width: 0;
+  gap: 3px; background: rgba(var(--_dark-base-rgb), .85); padding: 4px; border-radius: 9px; border: 1px solid var(--_dark-border);
+  /* Stage 33: more buttons. Keep one row and let narrow viewports scroll horizontally instead of wrapping. */
+  max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.app-shell[data-layout="compact"] .vp-toolbar-wrap::after { content: ''; position: absolute; z-index: 2; top: 0; right: 0; bottom: 0; width: 24px; border-radius: 0 9px 9px 0;
+  background: linear-gradient(90deg, rgba(var(--_dark-base-rgb), 0), rgba(var(--_dark-base-rgb), .94)); pointer-events: none;
+  opacity: 0; transition: opacity 120ms ease; }
+.app-shell[data-layout="compact"] .vp-toolbar-wrap[data-overflow="true"][data-scroll-end="false"]::after { opacity: 1; }
 .vp-top-toolbar::-webkit-scrollbar { display: none; }
 .vp-top-toolbar > * { flex: 0 0 auto; }
 .vp-top-toolbar button { width: 32px; height: 32px; border: 0; background: transparent; border-radius: 6px; cursor: pointer;
@@ -469,7 +474,7 @@
 .app-shell[data-layout="intermediate"][data-inspector-open] .inspector-close { display: block; position: absolute; z-index: 2; top: 4px; right: 4px; width: 48px; height: 48px; border: 0; background: transparent; color: var(--_light-text); font-size: 28px; cursor: pointer; }
 .app-shell[data-layout="compact"] .app-body { position: relative; display: flex; flex-direction: column; overflow: hidden; }
 .app-shell[data-layout="compact"] .left-rail { display: none; }
-.app-shell[data-layout="compact"] .viewport-col { position: relative; flex: 1 1 0; min-height: 0; width: 100%; }
+.app-shell[data-layout="compact"] .viewport-col { position: relative; flex: 1 1 0; min-height: 0; width: 100%; overflow: hidden; }
 .app-shell[data-layout="compact"] .sidebar { position: relative; z-index: 5; flex: 0 0 64px; width: 100%; max-width: none; min-height: 0; border: 1px solid var(--_light-border); border-radius: 16px 16px 0 0; box-shadow: 0 -10px 32px rgba(0,0,0,.25); transition: flex-basis 190ms ease; }
 .app-shell[data-layout="compact"][data-sheet="collapsed"] .sidebar { flex-basis: var(--sheet-collapsed, 64px); }
 .app-shell[data-layout="compact"][data-sheet="half"] .sidebar { flex-basis: var(--sheet-half, max(64px, min(52%, calc(100% - 328px)))); }
@@ -492,7 +497,7 @@
 .mobile-navigation button { flex: 1; min-width: 48px; min-height: 48px; border: 0; background: transparent; color: var(--_dark-text-muted); font-weight: 600; }
 .mobile-navigation button[aria-pressed="true"] { color: var(--_accent-on-dark); box-shadow: inset 0 3px var(--_accent); }
 .mobile-navigation button:disabled { opacity: .5; }
-@media (prefers-reduced-motion: reduce) { .app-shell[data-layout="compact"] .sidebar { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .app-shell[data-layout="compact"] .sidebar, .app-shell[data-layout="compact"] .vp-toolbar-wrap::after { transition: none; } }
 
 /* Compact header: brand/open/More stay on the first row; Prepare/Preview get their own full-width touch row. */
 .topbar[data-layout="compact"] { display: grid; flex: 0 0 auto; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-rows: 56px 48px; gap: 4px 8px; width: 100%; min-width: 0; height: auto; padding: 4px 8px 0; overflow: visible; }
@@ -515,9 +520,9 @@
 .topbar[data-layout="compact"][data-gcode="true"] .tb-tabs { grid-row: 3; }
 .topbar[data-layout="compact"] .tb-tabs button { flex: 1 1 50%; min-width: 0; min-height: 48px; padding: 0 8px; }
 .tb-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
-.app-shell[data-layout="compact"] .vp-top-toolbar { max-width: calc(100% - 16px); overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--_dark-text-faint) rgba(var(--_dark-base-rgb), .55); }
-.app-shell[data-layout="compact"] .vp-top-toolbar::-webkit-scrollbar { display: block; height: 5px; }
-.app-shell[data-layout="compact"] .vp-top-toolbar::-webkit-scrollbar-thumb { background: var(--_dark-text-faint); border-radius: 4px; }
+.app-shell[data-layout="compact"] .vp-toolbar-wrap { max-width: calc(100% - 16px); }
+.app-shell[data-layout="compact"] .vp-top-toolbar { scrollbar-width: none; }
+.app-shell[data-layout="compact"] .vp-top-toolbar::-webkit-scrollbar { display: none; }
 .app-shell[data-layout="compact"] .vp-top-toolbar button { flex: 0 0 48px; width: 48px; height: 48px; }
 .app-shell[data-layout="compact"] .vp-top-toolbar button img { width: 22px; height: 22px; }
 
@@ -570,4 +575,5 @@
 .app-shell[data-layout="compact"] .slice-support { min-height: 48px; }
 .app-shell[data-layout="compact"] .slice-support input,
 .app-shell[data-layout="compact"] .auto-slice input { width: 20px; height: 20px; margin: 0; }
-.app-shell[data-layout="compact"] .vp-status { bottom: 58px; }
+.app-shell[data-layout="compact"] .vp-status { right: 86px; bottom: 48px; }
+.app-shell:not([data-layout="compact"]) .vp-status { right: 90px; padding-right: 78px; }

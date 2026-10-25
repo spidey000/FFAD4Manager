@@ -1,7 +1,8 @@
 // The viewport status line, kept pure so its exact wording (objects vs empty scene, with and without the
 //  keyboard hint) is testable without a renderer. The scene passes the values it already tracks.
-export function sceneStatus({ count, selectedCount, selectedName, hoveredName, shortcuts }) {
+export function sceneStatus({ count, selectedCount, selectedName, hoveredName, shortcuts, compact = false }) {
   const label = selectedCount > 1 ? `${selectedCount} objects` : selectedName || '—'
+  if (compact) return count ? `${count} object(s) · selected: ${label}` : `hover: ${hoveredName || '—'} · selected: ${label}`
   return count
     ? `${count} object(s) · selected: ${label}`
       + (shortcuts ? ' | M/R/S · Ctrl+click to add · Shift+drag to box-select · ? for shortcuts' : ' | Ctrl+click to add · Shift+drag to box-select')

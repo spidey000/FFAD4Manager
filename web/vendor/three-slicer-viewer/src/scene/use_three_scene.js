@@ -295,7 +295,7 @@ export function useThreeScene(deps) {
     // The keyboard half of the hint is dropped when features.shortcuts is off — a status bar advertising a key
     //  that has been switched off is worse than a shorter status bar.
     const statusText = () => sceneStatus({ count: objectsRef.current.length, selectedCount: selection.size,
-      selectedName: selected?.userData.name, hoveredName: hovered?.userData.name, shortcuts: !!keyRef.current })
+      selectedName: selected?.userData.name, hoveredName: hovered?.userData.name, shortcuts: !!keyRef.current, compact: renderer.domElement.closest('.app-shell')?.dataset.layout === 'compact' })
     const toPointer = ev => { const r = renderer.domElement.getBoundingClientRect(); pointer.x = ((ev.clientX - r.left) / r.width) * 2 - 1; pointer.y = -((ev.clientY - r.top) / r.height) * 2 + 1 }
     const pick = () => { raycaster.setFromCamera(pointer, camera); const hits = raycaster.intersectObjects(activeMeshes(), false); return hits.length ? hits[0].object : null }
     // Stage 20: painting — the raycast -> kernel-coordinate conversion, the brush cursor preview and the stroke's
@@ -852,7 +852,7 @@ export function useThreeScene(deps) {
     // The shortcut body lives in component scope (keyRef — captures the latest state/functions each render). The effect only forwards.
     const onKey = e => { keyRef.current?.(e); invalidate() }
     window.addEventListener('keydown', onKey)
-    const ro = new ResizeObserver(() => { w = mount.clientWidth || w; h = mount.clientHeight || h; camera.aspect = w / h; camera.updateProjectionMatrix(); renderer.setSize(w, h); invalidate() })
+    const ro = new ResizeObserver(() => { w = mount.clientWidth || w; h = mount.clientHeight || h; camera.aspect = w / h; camera.updateProjectionMatrix(); renderer.setSize(w, h); setStatus(statusText()); invalidate() })
     ro.observe(mount)
     setStatus(statusText())
     let raf = 0, lastRender = 0

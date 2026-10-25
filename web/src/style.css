@@ -17,6 +17,7 @@
   .control-strip{grid-template-columns:repeat(2,minmax(0,1fr));width:auto;max-width:100%}
   .strip-title,.strip-dimensions{grid-column:1/-1}
   .setting-select{width:100%}
+  .workspace-hint{display:none}
 }
 
 /* Let the actual embedded viewer, not the page gutter, decide its measured layout variant on tablets. */

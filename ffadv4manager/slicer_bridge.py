@@ -50,6 +50,7 @@ def load_access_config(environ=None, *, required=False):
         "jwks_url": f"https://{domain}/cdn-cgi/access/certs",
         "audience": audience,
         "email": email,
+        "service_token_id": environ.get("CF_ACCESS_SERVICE_TOKEN_ID", "").strip(),
         "public_origin": public_origin,
         "public_host": parsed.hostname,
     }
@@ -66,7 +67,10 @@ def verify_access_assertion(assertion: str, config: dict, jwks_client) -> bool:
             audience=config["audience"],
             options={"require": ["exp"]},
         )
-        return claims.get("email") == config["email"]
+        email_matches = claims.get("email") == config["email"]
+        service_token_id = config.get("service_token_id")
+        service_token_matches = bool(service_token_id) and claims.get("common_name") == service_token_id
+        return email_matches or service_token_matches
     except Exception:
         return False
 

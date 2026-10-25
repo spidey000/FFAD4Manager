@@ -256,6 +256,20 @@ def test_access_configuration_is_all_or_nothing():
         slicer_bridge.load_access_config({}, required=True)
 
 
+def test_access_configuration_loads_optional_service_token_id():
+    environ = {
+        "CF_ACCESS_TEAM_DOMAIN": "team.example.com",
+        "CF_ACCESS_AUD": "fixed-audience",
+        "CF_ACCESS_EMAIL": "allowed@example.com",
+        "CF_ACCESS_PUBLIC_ORIGIN": "https://print.example.com",
+        "CF_ACCESS_SERVICE_TOKEN_ID": "bot-client-id",
+    }
+    config = slicer_bridge.load_access_config(environ)
+    assert config["service_token_id"] == "bot-client-id"
+    del environ["CF_ACCESS_SERVICE_TOKEN_ID"]
+    assert slicer_bridge.load_access_config(environ)["service_token_id"] == ""
+
+
 def test_require_access_prevents_startup_without_configuration(tmp_path, monkeypatch):
     index = tmp_path / "index.html"
     index.write_text(f"<script>{slicer_bridge.TOKEN_PLACEHOLDER}</script>")
@@ -284,6 +298,7 @@ def generated_access_key(monkeypatch):
     config = {
         "issuer": "https://team.example.com", "jwks_url": "https://team.example.com/cdn-cgi/access/certs",
         "audience": "fixed-audience", "email": "allowed@example.com",
+        "service_token_id": "bot-client-id",
         "public_origin": "https://print.example.com", "public_host": "print.example.com",
     }
 
@@ -363,6 +378,39 @@ def test_crypto_assertion_failures_never_call_upload_or_start(tmp_path, generate
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+@pytest.mark.parametrize(
+    "service_token_id,claims,expected",
+    [
+        ("bot-client-id", {"email": "allowed@example.com"}, True),
+        ("bot-client-id", {"email": "other@example.com", "common_name": "bot-client-id"}, True),
+        ("bot-client-id", {"email": "other@example.com", "common_name": "different-client-id"}, False),
+        ("", {"email": "other@example.com", "common_name": "bot-client-id"}, False),
+    ],
+)
+def test_access_assertion_accepts_only_allowed_human_or_configured_bot(
+    generated_access_key, service_token_id, claims, expected
+):
+    config, _, token, client_class = generated_access_key
+    config["service_token_id"] = service_token_id
+    assertion = token(**claims)
+    assert slicer_bridge.verify_access_assertion(assertion, config, client_class(config["jwks_url"])) is expected
+
+
+def test_access_assertion_accepts_service_token_without_email(generated_access_key):
+    config, private_key, _, client_class = generated_access_key
+    config["service_token_id"] = "bot-client-id"
+    claims = {
+        "iss": config["issuer"],
+        "aud": config["audience"],
+        "exp": int(time.time()) + 300,
+        "common_name": "bot-client-id",
+    }
+    assertion = jwt.encode(claims, private_key, algorithm="RS256", headers={"kid": "local-key"})
+    assert slicer_bridge.verify_access_assertion(
+        assertion, config, client_class(config["jwks_url"])
+    ) is True
 
 
 def test_access_upload_start_uses_cached_jwks_client_test_double(tmp_path, generated_access_key):

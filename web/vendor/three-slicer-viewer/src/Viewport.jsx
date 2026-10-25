@@ -626,8 +626,8 @@ export default function Viewport({
     //  addition on top, not a replacement. Opening it on T1 is what upstream does — the gizmo starts at
     //  m_selected_extruder_idx 0 — and the panel's chips are one click from any other filament.
     paintMaterial: () => startMaterialPaint(0),
-    objectCount: () => objects.length,
-  })
+    objectCount: () => objects.length, setGizmo,
+  }, { compact: layout.variant === 'compact', gizmoMode: gmode, hasSelection: selectedIds.length > 0 })
 
   // ---- Keyboard shortcuts (upstream SPECS §4 + PrusaSlicer/Cura conventions) ----
   //  Which keys are live depends on Prepare/Preview. All are ignored while an input widget has focus.

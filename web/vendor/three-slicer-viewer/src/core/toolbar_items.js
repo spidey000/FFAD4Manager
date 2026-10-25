@@ -1,13 +1,20 @@
 import {
   addIcon, deleteIcon, deleteallIcon, duplicateIcon, splitIcon, onbedIcon, arrangeIcon, orientIcon,
   cutIcon, booleanIcon, negativeIcon, seamIcon, mmuIcon, textmarkIcon, measureIcon, varlayerIcon,
+  moveIcon, rotateIcon, scaleIcon,
 } from './icons.js'
 
 // Object toolbar definition, following the upstream toolbar (GLToolbar) layout.
 // Entries without `run` render disabled, and the tooltip says what the button is and why it is unavailable.
 // When adding buttons, edit this array instead of duplicating JSX.
-export function objectTools(actions) {
+export function objectTools(actions, { compact = false, gizmoMode, hasSelection = true } = {}) {
   return [
+    ...(compact ? [
+      { id: 'gizmo-move', icon: moveIcon, label: 'Move', tip: hasSelection ? 'Move the selected object' : 'Select an object first', run: () => actions.setGizmo('translate'), active: gizmoMode === 'translate', disabled: () => !hasSelection },
+      { id: 'gizmo-rotate', icon: rotateIcon, label: 'Rotate', tip: hasSelection ? 'Rotate the selected object' : 'Select an object first', run: () => actions.setGizmo('rotate'), active: gizmoMode === 'rotate', disabled: () => !hasSelection },
+      { id: 'gizmo-scale', icon: scaleIcon, label: 'Scale', tip: hasSelection ? 'Scale the selected object — drag a corner to resize X, Y and Z together' : 'Select an object first', run: () => actions.setGizmo('scale'), active: gizmoMode === 'scale', disabled: () => !hasSelection },
+      { sep: true },
+    ] : []),
     { id: 'add', icon: addIcon, label: 'Add', tip: 'Add a model file to the current plate (existing objects are kept)', run: actions.add },
     { id: 'delete', icon: deleteIcon, label: 'Delete', tip: 'Delete the selected object (Del)', run: actions.remove },
     { id: 'delete-all', icon: deleteallIcon, label: 'Delete all', tip: 'Delete every object on the plate', run: actions.removeAll, disabled: () => actions.objectCount() === 0 },

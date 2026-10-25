@@ -67,6 +67,8 @@
   display: flex; align-items: center; justify-content: center; }
 .vp-top-toolbar button img { width: 18px; height: 18px; opacity: .82; }
 .vp-top-toolbar button:hover:not(:disabled) { background: var(--_dark-control-hover); }
+.vp-top-toolbar button.on { background: var(--_accent); }
+.vp-top-toolbar button.on img { opacity: 1; filter: brightness(1.6); }
 .vp-top-toolbar button:disabled { opacity: .32; cursor: not-allowed; }
 .vtt-sep { width: 1px; align-self: stretch; background: var(--_dark-border); margin: 3px 3px; }
 
@@ -530,6 +532,23 @@
    their rows and a transparent pseudo hit-area for the plate strip, whose layout must stay anchored and tight. */
 .app-shell[data-layout="compact"] .plate-bar button { position: relative; min-width: 26px; width: auto; height: 26px; min-height: 26px; }
 .app-shell[data-layout="compact"] .plate-bar button::before { content: ''; position: absolute; inset: -9px; z-index: 1; }
+
+/* Coarse pointers get full-size targets without changing the fine-pointer desktop density. */
+@media (pointer: coarse) {
+  .app-shell[data-layout="intermediate"] .left-rail { flex-basis: 56px; }
+  .app-shell:not([data-layout="compact"]) .left-rail button { width: 48px; height: 48px; }
+  .app-shell:not([data-layout="compact"]) .vp-top-toolbar button { flex: 0 0 48px; width: 48px; height: 48px; }
+  .app-shell:not([data-layout="compact"]) .plate-bar button { min-width: 48px; height: 48px; }
+  .app-shell:not([data-layout="compact"]) .topbar { flex-basis: 56px; height: 56px; }
+  .app-shell:not([data-layout="compact"]) .topbar .tb-btn,
+  .app-shell:not([data-layout="compact"]) .topbar .tb-icon,
+  .app-shell:not([data-layout="compact"]) .topbar .tb-tabs button { min-height: 48px; }
+  .app-shell:not([data-layout="compact"]) .topbar .tb-btn { min-width: 48px; }
+  .app-shell:not([data-layout="compact"]) .topbar .tb-icon { position: relative; }
+  .app-shell:not([data-layout="compact"]) .topbar .tb-icon::before { content: ''; position: absolute; inset: 0 -11px; }
+  .app-shell:not([data-layout="compact"]) .tb-gcode button { min-height: 44px; }
+  .app-shell[data-layout="compact"] .plate-bar button::before { inset: -11px; }
+}
 
 .app-shell[data-layout="compact"] .sc-head-actions button { position: relative; display: inline-flex; min-width: 48px; width: 48px; height: 48px;
   min-height: 48px; align-items: center; justify-content: center; border: 0; background: transparent; isolation: isolate; }

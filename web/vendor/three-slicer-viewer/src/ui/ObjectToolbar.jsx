@@ -30,8 +30,8 @@ export default function ObjectToolbar({ tools }) {
       <div ref={scrollerRef} className="vp-top-toolbar" role="toolbar" aria-label="Object tools" onScroll={measure}>
         {tools.map((t, i) => t.sep
           ? <span key={'sep' + i} className="vtt-sep" />
-          : <button key={t.id} onClick={t.run} disabled={t.disabled?.() ?? !t.run}
-              title={t.tip} data-testid={`tool-${t.id}`}><img src={t.icon} alt={t.label} /></button>)}
+          : <button key={t.id} className={t.active ? 'on' : ''} aria-pressed={t.id?.startsWith('gizmo-') ? !!t.active : undefined} onClick={t.run} disabled={t.disabled?.() ?? !t.run}
+              title={t.tip} aria-label={t.label} data-testid={`tool-${t.id}`}><img src={t.icon} alt="" /></button>)}
       </div>
     </div>
   )

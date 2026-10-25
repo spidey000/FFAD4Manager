@@ -42,6 +42,13 @@ function App() {
   const [progress, setProgress] = useState(0)
   const [slicing, setSlicing] = useState(false)
   const [bridgeState, setBridgeState] = useState({ kind: 'idle', text: 'Ready for a sliced file' })
+  const [cameraOpen, setCameraOpen] = useState(false)
+  const [cameraRefresh, setCameraRefresh] = useState(0)
+  const [cameraImage, setCameraImage] = useState('')
+  const [cameraState, setCameraState] = useState({ kind: 'loading', text: 'Requesting a snapshot from the printer…' })
+  const [filenameExpanded, setFilenameExpanded] = useState(false)
+  const cameraDialogRef = useRef(null)
+  const cameraButtonRef = useRef(null)
 
   useEffect(() => {
     const machine = printerSettings(PRINTER)
@@ -76,6 +83,66 @@ function App() {
       }
     }).catch(() => setBridgeState({ kind: 'error', text: 'Preset catalog could not be loaded.' }))
   }, [])
+
+  useEffect(() => {
+    if (!cameraOpen) return
+    let active = true
+    setCameraState({ kind: 'loading', text: 'Requesting a snapshot from the printer…' })
+    fetch('/api/camera/snapshot', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${bridgeToken}` },
+    }).then(async response => {
+      if (!active) return
+      if (response.redirected || response.status === 401 || response.status === 403) {
+        throw new Error('Your Access session is missing or expired. Sign in, then try again.')
+      }
+      if (!response.ok) {
+        let message = `The printer could not provide a snapshot (${response.status}).`
+        try {
+          const result = await response.json()
+          if (result?.error) message = result.error
+        } catch { /* The bridge may return a plain HTTP error. */ }
+        throw new Error(message)
+      }
+      if ((response.headers.get('content-type') || '').toLowerCase().includes('json')) {
+        let result
+        try { result = await response.json() } catch { /* Report the invalid payload below. */ }
+        throw new Error(result?.error || 'The printer bridge returned an error instead of a JPEG snapshot.')
+      }
+      const blob = await response.blob()
+      if (!active) return
+      if (!blob.type.toLowerCase().includes('image/jpeg')) {
+        throw new Error('The printer returned an unexpected response instead of a JPEG snapshot.')
+      }
+      const url = URL.createObjectURL(blob)
+      setCameraImage(current => {
+        if (current) URL.revokeObjectURL(current)
+        return url
+      })
+      setCameraState({ kind: 'success', text: 'Snapshot captured from the printer.' })
+    }).catch(error => {
+      if (active) setCameraState({ kind: 'error', text: error.message || 'Could not reach the printer bridge.' })
+    })
+    return () => { active = false }
+  }, [cameraOpen, cameraRefresh])
+
+  useEffect(() => {
+    if (cameraOpen) cameraDialogRef.current?.showModal()
+    else if (cameraDialogRef.current?.open) cameraDialogRef.current.close()
+  }, [cameraOpen])
+
+  useEffect(() => () => {
+    if (cameraImage) URL.revokeObjectURL(cameraImage)
+  }, [cameraImage])
+
+  function closeCamera() {
+    setCameraOpen(false)
+    setCameraImage(current => {
+      if (current) URL.revokeObjectURL(current)
+      return ''
+    })
+    requestAnimationFrame(() => cameraButtonRef.current?.focus())
+  }
 
   const currentSettingsFingerprint = settingsFingerprint({ settings, plateSettings })
   const activeArtifact = sliceArtifacts[selectedPlate] ?? null
@@ -145,7 +212,7 @@ function App() {
     </header>
 
     <section className="workspace" aria-label="Model preparation workspace">
-      <div className="workspace-heading"><div><span className="eyebrow">MODEL / TOOLPATH</span><h2>Work surface</h2></div><div className="workspace-hint"><span className="crosshair">＋</span> Drop a model or use the viewer’s open control</div></div>
+      <div className="workspace-heading"><div><span className="eyebrow">MODEL / TOOLPATH</span><h2>Work surface</h2></div><div className="workspace-heading-actions"><div className="workspace-hint"><span className="crosshair">＋</span> Drop a model or use the viewer’s open control</div></div></div>
       {machineMissing && <div className="profile-warning" role="alert">The bundled Adventurer 4 machine profile is missing. Slicing is unavailable until a compatible bundled profile is available.</div>}
       <div className="viewport-frame"><Viewport
         settings={settings}
@@ -250,20 +317,24 @@ function App() {
           return false
         }}
       /></div>
-      <div className="work-send" aria-label="Send sliced file to printer">
+      <div className="work-send" aria-label="Printer actions and slice status">
         <div className="work-send-status" role="status" aria-live="polite">
           <span className={`status-led ${bridgeState.kind}`} />
           <span>{bridgeState.text}</span>
         </div>
         {slicing && <div className="work-progress" aria-label={`Slicing ${progress}%`}><span style={{ width: `${progress}%` }} /></div>}
         <div className="work-send-actions">
-          {activeArtifact && artifactIsCurrent && <label className="work-filename">
-            <span>G-CODE FILE</span>
-            <input value={activeArtifact.filename} onChange={event => setSliceArtifacts(current => ({
-              ...current,
-              [selectedPlate]: { ...current[selectedPlate], filename: event.target.value },
-            }))} aria-label="G-code filename" />
-          </label>}
+          <button ref={cameraButtonRef} className="button camera-button" type="button" onClick={() => { setCameraOpen(true); setCameraRefresh(value => value + 1) }} aria-label="Open printer camera snapshot" aria-haspopup="dialog"><span aria-hidden="true">◉</span><span className="camera-button-label">PRINTER CAMERA</span></button>
+          {activeArtifact && artifactIsCurrent && <div className={`work-filename-wrap${filenameExpanded ? ' expanded' : ''}`}>
+            <button className="filename-toggle" type="button" aria-expanded={filenameExpanded} aria-controls="gcode-filename-field" onClick={() => setFilenameExpanded(value => !value)}>{filenameExpanded ? 'HIDE FILE NAME' : 'FILE NAME'} <span aria-hidden="true">{filenameExpanded ? '−' : '+'}</span></button>
+            <label className="work-filename" id="gcode-filename-field" hidden={!filenameExpanded}>
+              <span>G-CODE FILE</span>
+              <input value={activeArtifact.filename} onChange={event => setSliceArtifacts(current => ({
+                ...current,
+                [selectedPlate]: { ...current[selectedPlate], filename: event.target.value },
+              }))} aria-label="G-code filename" />
+            </label>
+          </div>}
           <div className="work-send-buttons">
             <button className="button button-secondary" onClick={() => sendPrint(false)} disabled={!artifactIsCurrent || slicing || machineMissing}>UPLOAD FILE <span>↗</span></button>
             <button className="button button-primary" onClick={() => sendPrint(true)} disabled={!artifactIsCurrent || slicing || machineMissing}>UPLOAD + START <span>→</span></button>
@@ -271,6 +342,16 @@ function App() {
         </div>
       </div>
     </section>
+
+    <dialog className="camera-dialog" ref={cameraDialogRef} aria-labelledby="camera-title" onCancel={event => { event.preventDefault(); closeCamera() }} onClick={event => { if (event.target === cameraDialogRef.current) closeCamera() }}>
+      <div className="camera-modal-head"><div><span className="eyebrow">LIVE PRINTER SNAPSHOT</span><h2 id="camera-title">Printer camera</h2></div><button className="icon-button" type="button" onClick={closeCamera} aria-label="Close printer camera">×</button></div>
+      <div className="camera-image-frame" aria-busy={cameraState.kind === 'loading'}>
+        {cameraImage && <img src={cameraImage} alt="Latest snapshot captured from the printer" />}
+        {!cameraImage && <div className={`camera-message ${cameraState.kind}`} role={cameraState.kind === 'error' ? 'alert' : 'status'} aria-live="polite"><span className="camera-spinner" aria-hidden="true" />{cameraState.text}</div>}
+      </div>
+      {cameraImage && <p className={`camera-state ${cameraState.kind}`} role="status" aria-live="polite">{cameraState.text}</p>}
+      <div className="camera-modal-actions"><span className="camera-source">Captured by the printer bridge</span><div><button type="button" className="button button-secondary" onClick={() => setCameraRefresh(value => value + 1)} disabled={cameraState.kind === 'loading'}>REFRESH SNAPSHOT <span aria-hidden="true">↻</span></button><button type="button" className="button button-primary" onClick={closeCamera}>DONE</button></div></div>
+    </dialog>
 
     <footer><span>AD4 PRINT STATION <span className="footer-dot">/</span> LOCAL ONLY</span><span>220 × 200 × 250 MM <span className="footer-dot">/</span> 0.4 MM NOZZLE</span></footer>
   </main>

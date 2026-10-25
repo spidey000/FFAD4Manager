@@ -24,6 +24,8 @@ TOKEN_PLACEHOLDER = "__FFADV4MANAGER_TOKEN__"
 # Bound request memory while supporting larger (up to 64 MiB) sliced G-code jobs.
 MAX_BODY = 64 * 1024 * 1024
 BODY_READ_TIMEOUT = 15
+CAMERA_SNAPSHOT_TIMEOUT = 20
+MAX_SNAPSHOT_REQUEST_BODY = 1024
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.gcode$", re.IGNORECASE)
 _ACCESS_ENV = ("CF_ACCESS_TEAM_DOMAIN", "CF_ACCESS_AUD", "CF_ACCESS_EMAIL", "CF_ACCESS_PUBLIC_ORIGIN")
 
@@ -123,7 +125,29 @@ def invoke_upload(gcode: str, remote_name: str, start: bool) -> subprocess.Compl
             pass
 
 
-def make_handler(web_root: Path, token: str, upload=invoke_upload, access_config=None):
+def invoke_camera_snapshot() -> bytes:
+    """Capture one JPEG through the installed camera CLI, without a shell."""
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as stream:
+        path = stream.name
+    try:
+        argv = [sys.executable, "-m", "ffadv4manager.cli", "camera", "snapshot", path]
+        result = subprocess.run(
+            argv, capture_output=True, text=True, check=False, timeout=CAMERA_SNAPSHOT_TIMEOUT,
+        )
+        if result.returncode:
+            raise RuntimeError("Camera snapshot failed")
+        image = Path(path).read_bytes()
+        if not image.startswith(b"\xff\xd8") or not image.endswith(b"\xff\xd9"):
+            raise RuntimeError("Camera snapshot failed")
+        return image
+    finally:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+
+
+def make_handler(web_root: Path, token: str, upload=invoke_upload, access_config=None, snapshot=invoke_camera_snapshot):
     if access_config is None:
         access_config = load_access_config()
     jwks_client = jwt.PyJWKClient(
@@ -131,6 +155,7 @@ def make_handler(web_root: Path, token: str, upload=invoke_upload, access_config
         timeout=5, max_cached_keys=16,
     ) if access_config else None
     busy = threading.Lock()
+    snapshot_busy = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "FFADV4ManagerSlicer/1"
@@ -202,13 +227,14 @@ def make_handler(web_root: Path, token: str, upload=invoke_upload, access_config
             self.wfile.write(body)
 
         def do_POST(self) -> None:
-            if self.path != "/api/print":
+            if self.path not in {"/api/print", "/api/camera/snapshot"}:
                 self._json(404, {"success": False, "error": "Not found"})
                 return
             if not self._authorized_origin():
                 self._json(403, {"success": False, "error": "Invalid Host or Origin"})
                 return
-            if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+            if (self.path == "/api/print"
+                    and self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json"):
                 self._json(415, {"success": False, "error": "Content-Type must be application/json"})
                 return
             if self.headers.get("Authorization") != f"Bearer {token}":
@@ -219,6 +245,47 @@ def make_handler(web_root: Path, token: str, upload=invoke_upload, access_config
                 if not assertion or not verify_access_assertion(assertion, access_config, jwks_client):
                     self._json(401, {"success": False, "error": "Invalid Access assertion"})
                     return
+            if self.path == "/api/camera/snapshot":
+                if self.headers.get("Transfer-Encoding"):
+                    self._json(400, {"success": False, "error": "Request body must be empty"})
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    length = -1
+                if length < 0 or length > MAX_SNAPSHOT_REQUEST_BODY:
+                    self._json(413, {"success": False, "error": "Request body size is invalid or exceeds limit"})
+                    return
+                try:
+                    body = self.rfile.read(length)
+                except TimeoutError:
+                    self._json(408, {"success": False, "error": "Request body read timed out"})
+                    return
+                if body.strip():
+                    self._json(400, {"success": False, "error": "Request body must be empty"})
+                    return
+                if not snapshot_busy.acquire(blocking=False):
+                    self._json(409, {"success": False, "error": "A camera snapshot is already in progress"})
+                    return
+                try:
+                    try:
+                        image = snapshot()
+                    except subprocess.TimeoutExpired:
+                        self._json(504, {"success": False, "error": "Camera snapshot timed out"})
+                        return
+                    except Exception:  # noqa: BLE001
+                        self._json(502, {"success": False, "error": "Camera snapshot failed"})
+                        return
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(image)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.end_headers()
+                    self.wfile.write(image)
+                finally:
+                    snapshot_busy.release()
+                return
             try:
                 length = int(self.headers.get("Content-Length", ""))
             except ValueError:

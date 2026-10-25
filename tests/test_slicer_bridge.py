@@ -58,6 +58,26 @@ def test_upload_uses_fixed_module_argv_and_cleans_temp_file(monkeypatch, start):
     assert not Path(argv[4]).exists()
 
 
+def test_camera_snapshot_cli_uses_fixed_argv_timeout_and_cleans_output(monkeypatch):
+    captured = {}
+    jpeg = b"\xff\xd8frame\xff\xd9"
+
+    def fake_run(argv, **kwargs):
+        captured.update(argv=argv, kwargs=kwargs)
+        Path(argv[-1]).write_bytes(jpeg)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(slicer_bridge.subprocess, "run", fake_run)
+    assert slicer_bridge.invoke_camera_snapshot() == jpeg
+    assert captured["argv"][:5] == [slicer_bridge.sys.executable, "-m", "ffadv4manager.cli", "camera", "snapshot"]
+    assert Path(captured["argv"][-1]).suffix == ".jpg"
+    assert captured["kwargs"] == {
+        "capture_output": True, "text": True, "check": False,
+        "timeout": slicer_bridge.CAMERA_SNAPSHOT_TIMEOUT,
+    }
+    assert not Path(captured["argv"][-1]).exists()
+
+
 def test_slicer_server_defaults_to_loopback_and_web_dist(tmp_path, monkeypatch):
     index = tmp_path / "index.html"
     index.write_text(f"<script>{slicer_bridge.TOKEN_PLACEHOLDER}</script>")
@@ -120,19 +140,24 @@ def test_missing_ui_build_has_actionable_error(tmp_path):
 @pytest.fixture
 def http_bridge(tmp_path, access_config=None):
     calls = []
+    snapshots = []
 
     def upload(gcode, remote_name, start):
         calls.append((gcode, remote_name, start))
         return subprocess.CompletedProcess([], 0, "ok", "")
 
+    def snapshot():
+        snapshots.append(True)
+        return b"\xff\xd8first-frame\xff\xd9"
+
     server = ThreadingHTTPServer(
         ("127.0.0.1", 0),
-        slicer_bridge.make_handler(tmp_path, "test-secret-token", upload, access_config=access_config),
+        slicer_bridge.make_handler(tmp_path, "test-secret-token", upload, access_config=access_config, snapshot=snapshot),
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield server.server_port, calls
+        yield server.server_port, calls, snapshots
     finally:
         server.shutdown()
         server.server_close()
@@ -172,6 +197,35 @@ def post_print(port, *, origin="correct", host="correct", token="correct", asser
     return result
 
 
+def post_snapshot(port, *, origin="correct", host="correct", token="correct", assertion=None, body=b""):
+    authority = f"127.0.0.1:{port}"
+    headers = {"Authorization": "Bearer test-secret-token", "Host": authority}
+    if origin == "correct":
+        headers["Origin"] = f"http://{authority}"
+    elif origin == "wrong":
+        headers["Origin"] = "http://example.com"
+    elif origin == "public":
+        headers["Origin"] = "https://print.example.com"
+    if host == "wrong":
+        headers["Host"] = "example.com"
+    elif host == "missing":
+        headers["Host"] = ""
+    elif host == "public":
+        headers["Host"] = "print.example.com"
+    if token == "missing":
+        headers.pop("Authorization")
+    elif token == "wrong":
+        headers["Authorization"] = "Bearer wrong-token"
+    if assertion is not None:
+        headers["Cf-Access-Jwt-Assertion"] = assertion
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+    connection.request("POST", "/api/camera/snapshot", body=body, headers=headers)
+    response = connection.getresponse()
+    result = response.status, dict(response.getheaders()), response.read()
+    connection.close()
+    return result
+
+
 @pytest.mark.parametrize(
     "kwargs,expected_status",
     [
@@ -185,7 +239,7 @@ def post_print(port, *, origin="correct", host="correct", token="correct", asser
     ],
 )
 def test_http_rejects_unauthorized_requests_without_upload(http_bridge, kwargs, expected_status):
-    port, calls = http_bridge
+    port, calls, _ = http_bridge
     status, body = post_print(port, **kwargs)
     assert status == expected_status
     assert json.loads(body)["success"] is False
@@ -193,7 +247,7 @@ def test_http_rejects_unauthorized_requests_without_upload(http_bridge, kwargs, 
 
 
 def test_http_valid_upload_only_succeeds_without_start(http_bridge):
-    port, calls = http_bridge
+    port, calls, _ = http_bridge
     status, body = post_print(port)
     assert status == 200
     result = json.loads(body)
@@ -203,13 +257,69 @@ def test_http_valid_upload_only_succeeds_without_start(http_bridge):
 
 
 def test_http_explicit_start_true_passes_start_to_mock_upload(http_bridge):
-    port, calls = http_bridge
+    port, calls, _ = http_bridge
     status, body = post_print(port, payload=b'{"filename":"safe.gcode","gcode":"G1 X1","start":true}')
     assert status == 200
     result = json.loads(body)
     assert result["success"] is True
     assert result["message"] == "Upload completed; print-start command acknowledged; physical printing not verified"
     assert calls == [("G1 X1", "safe.gcode", True)]
+
+
+def test_camera_snapshot_returns_jpeg_with_security_and_cache_headers(http_bridge):
+    port, calls, snapshots = http_bridge
+    status, headers, body = post_snapshot(port)
+    assert status == 200
+    assert body == b"\xff\xd8first-frame\xff\xd9"
+    assert headers["Content-Type"] == "image/jpeg"
+    assert headers["Content-Length"] == str(len(body))
+    assert headers["Cache-Control"] == "no-store"
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    assert snapshots == [True]
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "kwargs,expected_status",
+    [
+        ({"origin": "wrong"}, 403), ({"origin": "missing"}, 403),
+        ({"host": "wrong"}, 403), ({"host": "missing"}, 403),
+        ({"token": "wrong"}, 401), ({"token": "missing"}, 401),
+        ({"body": b"not empty"}, 400),
+    ],
+)
+def test_camera_snapshot_rejects_unauthorized_or_nonempty_requests(http_bridge, kwargs, expected_status):
+    port, _, snapshots = http_bridge
+    status, _, body = post_snapshot(port, **kwargs)
+    assert status == expected_status
+    assert json.loads(body)["success"] is False
+    assert snapshots == []
+
+
+def test_camera_snapshot_failure_is_bounded_json_without_cli_details(tmp_path):
+    secret = "private-camera-url"
+
+    def failed_snapshot():
+        raise RuntimeError(secret)
+
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        slicer_bridge.make_handler(tmp_path, "test-secret-token", snapshot=failed_snapshot),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, headers, body = post_snapshot(server.server_port)
+        assert status == 502
+        assert headers["Content-Type"].startswith("application/json")
+        payload = json.loads(body)
+        assert payload == {"success": False, "error": "Camera snapshot failed"}
+        assert secret not in body.decode()
+        assert headers["Content-Length"] == str(len(body))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 def test_access_assertion_required_and_verified_before_upload(monkeypatch):
@@ -242,6 +352,36 @@ def test_access_assertion_required_and_verified_before_upload(monkeypatch):
         assert calls == [("G1 X1", "safe.gcode", False)]
         assert [item[0] for item in seen] == ["bad", "wrong-email", "good"]
         assert all(item[1] is config for item in seen)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_camera_snapshot_requires_access_assertion_when_configured(monkeypatch):
+    config = {
+        "issuer": "https://team.example.com", "jwks_url": "https://team.example.com/certs",
+        "audience": "fixed-audience", "email": "allowed@example.com",
+        "public_origin": "https://print.example.com", "public_host": "print.example.com",
+    }
+    snapshots = []
+    monkeypatch.setattr(slicer_bridge.jwt, "PyJWKClient", lambda *args, **kwargs: object())
+    monkeypatch.setattr(slicer_bridge, "verify_access_assertion", lambda assertion, *_: assertion == "good")
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        slicer_bridge.make_handler(Path("."), "test-secret-token", access_config=config,
+                                   snapshot=lambda: snapshots.append(True) or b"\xff\xd8x\xff\xd9"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_port
+        assert post_snapshot(port, host="public", origin="public")[0] == 401
+        assert post_snapshot(port, host="public", origin="public", assertion="bad")[0] == 401
+        assert snapshots == []
+        status, _, _ = post_snapshot(port, host="public", origin="public", assertion="good")
+        assert status == 200
+        assert snapshots == [True]
     finally:
         server.shutdown()
         server.server_close()
@@ -444,7 +584,7 @@ def test_access_upload_start_uses_cached_jwks_client_test_double(tmp_path, gener
 
 
 def test_http_accepts_gcode_larger_than_previous_limit(http_bridge):
-    port, calls = http_bridge
+    port, calls, _ = http_bridge
     gcode = "G" * (8 * 1024 * 1024 + 128 * 1024)
     payload = json.dumps({"filename": "large.gcode", "gcode": gcode, "start": False}).encode()
     status, body = post_print(port, payload=payload)
@@ -456,7 +596,7 @@ def test_http_accepts_gcode_larger_than_previous_limit(http_bridge):
 
 def test_http_body_timeout_rejects_request_and_releases_upload_lock(http_bridge, monkeypatch):
     monkeypatch.setattr(slicer_bridge, "BODY_READ_TIMEOUT", 0.05)
-    port, calls = http_bridge
+    port, calls, _ = http_bridge
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
     connection.putrequest("POST", "/api/print")
     connection.putheader("Host", f"127.0.0.1:{port}")

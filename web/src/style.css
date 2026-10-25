@@ -57,3 +57,92 @@
   .viewport-frame{height:90svh;min-height:680px}
   .work-send-buttons .button{min-height:48px}
 }
+
+/* Printer camera */
+.workspace-heading-actions{display:flex;align-items:center;gap:18px}
+.camera-button{height:39px;margin:0;padding-inline:14px;color:var(--acid);border-color:#58634c;font:10px var(--mono);letter-spacing:.08em}
+.camera-button>span{font-size:15px}
+.camera-dialog{width:min(760px,calc(100vw - 32px));max-width:none;max-height:min(90svh,860px);padding:0;border:1px solid #4b5549;background:#171c1c;color:#e9e7df;box-shadow:0 28px 100px #000b}
+.camera-dialog::backdrop{background:#080b0bd9;backdrop-filter:blur(6px)}
+.camera-modal-head{display:flex;align-items:center;justify-content:space-between;padding:22px 24px;border-bottom:1px solid var(--line)}
+.camera-modal-head h2{font:600 28px/.95 var(--display);text-transform:uppercase;margin:9px 0 0}
+.icon-button{width:40px;height:40px;background:#222827;border:1px solid #404944;color:#dce0d8;font-size:25px;cursor:pointer}
+.camera-image-frame{position:relative;display:grid;place-items:center;min-height:250px;max-height:65svh;aspect-ratio:4/3;margin:20px 24px 0;overflow:hidden;background-color:#0b1010;background-image:linear-gradient(#ffffff08 1px,transparent 1px),linear-gradient(90deg,#ffffff08 1px,transparent 1px);background-size:24px 24px;border:1px solid #343d38}
+.camera-image-frame img{display:block;width:100%;height:100%;object-fit:contain}
+.camera-message{display:flex;align-items:center;justify-content:center;gap:12px;padding:25px;color:#aeb5ab;text-align:center;font-size:13px;line-height:1.6;max-width:460px}
+.camera-message.error,.camera-state.error{color:#ff9b83}
+.camera-spinner{width:15px;height:15px;flex:0 0 auto;border:2px solid #687363;border-top-color:var(--acid);border-radius:50%;animation:camera-spin .8s linear infinite}
+@keyframes camera-spin{to{transform:rotate(360deg)}}
+.camera-state{margin:10px 24px 0;color:#aeb5ab;font-size:12px}
+.camera-modal-actions{display:flex;justify-content:space-between;align-items:center;gap:15px;padding:18px 24px 22px}
+.camera-source{color:#858e85;font:9px var(--mono);letter-spacing:.08em;text-transform:uppercase}
+.camera-modal-actions>div{display:flex;gap:8px}
+.camera-modal-actions .button{margin:0;min-height:42px}
+@media(max-width:760px){
+  .workspace-heading-actions{gap:0}
+  .workspace-heading-actions .workspace-hint{display:none}
+  .camera-button{height:42px}
+  .camera-modal-head{padding:18px}
+  .camera-image-frame{min-height:190px;margin:14px 14px 0;max-height:58svh}
+  .camera-modal-actions{align-items:stretch;flex-direction:column;padding:14px}
+  .camera-modal-actions>div{display:grid;grid-template-columns:1fr auto}
+  .camera-source{order:2}
+}
+@media(max-width:420px){
+  .camera-button{font-size:9px;padding-inline:10px}
+  .camera-dialog{width:calc(100vw - 20px)}
+  .camera-modal-actions>div .button{justify-content:center;padding-inline:10px;gap:8px;font-size:9px}
+}
+
+.work-filename-wrap{position:relative;min-width:100px}
+.filename-toggle{display:flex;align-items:center;justify-content:space-between;gap:9px;min-height:38px;padding:0 10px;background:#151a19;border:1px solid #3c4440;color:#bfc6bb;font:9px var(--mono);letter-spacing:.07em;white-space:nowrap;cursor:pointer}
+.filename-toggle span{color:var(--acid);font-size:14px}
+.work-filename-wrap .work-filename{position:absolute;z-index:4;right:0;bottom:calc(100% + 8px);min-width:240px;padding:12px;background:#1b2021;border:1px solid #424b43;box-shadow:0 12px 30px #0008}
+.work-filename-wrap .work-filename[hidden]{display:none}
+.work-send-buttons{flex:0 0 auto}
+@media(max-width:760px){
+  .station-shell{padding-bottom:calc(116px + env(safe-area-inset-bottom))}
+  .workspace{padding-top:15px;padding-bottom:0}
+  .workspace-heading{margin-bottom:9px}
+  .workspace-heading h2{font-size:24px;margin-top:5px}
+  .workspace-hint{display:none}
+  /* End the viewer above the fixed dock so its own settings sheet can use the full frame. */
+  .viewport-frame{height:calc(100svh - 265px - env(safe-area-inset-bottom));min-height:260px;max-height:none}
+  .work-send{position:fixed;z-index:20;left:0;right:0;bottom:0;display:grid;grid-template-columns:minmax(0,1fr);gap:0;margin:0;padding:8px 12px calc(8px + env(safe-area-inset-bottom));background:#171c1cF5;border:0;border-top:1px solid #465044;box-shadow:0 -12px 34px #0008;backdrop-filter:blur(14px)}
+  .work-send-status{min-height:24px;overflow:hidden;white-space:nowrap}
+  .work-send-status>span:last-child{overflow:hidden;text-overflow:ellipsis}
+  .work-progress{grid-row:2;margin:5px 0 7px}
+  .work-send-actions{display:flex;justify-content:stretch;gap:7px;width:100%}
+  .work-send-actions>.camera-button{flex:0 0 auto;width:auto;min-width:44px;justify-content:center;padding:0 11px}
+  .work-filename-wrap{flex:0 0 auto}
+  .filename-toggle{height:42px;min-height:42px;padding:0 8px;font-size:8px}
+  .work-filename-wrap .work-filename{position:fixed;right:10px;bottom:calc(100% + 12px + env(safe-area-inset-bottom));min-width:0;width:min(350px,calc(100vw - 20px))}
+  .work-send-buttons{display:flex;flex:1;min-width:0;gap:6px}
+  .work-send-buttons .button{flex:1;min-width:0;height:42px;justify-content:center;gap:6px;padding:0 9px;font-size:9px}
+  .work-send-buttons .button:disabled{opacity:.42}
+}
+@media(max-width:420px){
+  .station-shell{padding-bottom:calc(109px + env(safe-area-inset-bottom))}
+  .viewport-frame{height:calc(100svh - 265px - env(safe-area-inset-bottom));min-height:240px}
+  .work-send{padding-inline:8px}
+  .work-send-actions{gap:5px}
+  .work-send-actions>.camera-button{width:42px;padding:0;font-size:16px}
+  .camera-button-label{display:none}
+  .work-send-buttons{gap:5px}
+  .work-send-buttons .button{font-size:8px;padding-inline:5px;letter-spacing:0}
+  .filename-toggle{width:42px;justify-content:center;font-size:0}
+  .filename-toggle span{font-size:16px}
+}
+@media(max-height:520px) and (max-width:900px){
+  .station-shell{padding-bottom:calc(91px + env(safe-area-inset-bottom))}
+  .topbar{height:48px}
+  .workspace{padding-top:6px}
+  .workspace-heading{margin-bottom:4px}
+  .workspace-heading h2{font-size:19px}
+  .workspace-heading .eyebrow{font-size:8px}
+  .viewport-frame{height:calc(100svh - 205px - env(safe-area-inset-bottom));min-height:180px}
+  .viewport-frame{width:100%;margin-inline:0}
+  .work-send{padding-top:5px;padding-bottom:calc(5px + env(safe-area-inset-bottom))}
+  .work-send-status{min-height:20px;font-size:10px}
+  .work-send-actions .button,.filename-toggle{height:36px;min-height:36px}
+}

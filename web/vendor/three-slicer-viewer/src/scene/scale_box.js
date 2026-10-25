@@ -13,6 +13,7 @@ import { THEME } from '../core/theme.js'
 
 const CORNERS = [[0,0,0],[1,0,0],[0,1,0],[1,1,0],[0,0,1],[1,0,1],[0,1,1],[1,1,1]]
 const HANDLE_PX = 12          // handles keep a constant SCREEN size, so a 5mm part and a 300mm part grab alike
+const HIT_PX = 48             // finger target around each drawn handle; the extra area is invisible (see hitTargets)
 const COLOR = THEME.accent   // the selection green used by the emissive tint
 
 // How much bigger the object gets: the pointer's distance from the box centre now, over its distance at the grab.
@@ -63,6 +64,16 @@ export function createScaleBox({ scene, camera, domElement }) {
     mesh.frustumCulled = false; mesh.renderOrder = 1000; mesh.visible = false
     group.add(mesh); return mesh
   })
+  // A finger is ~9mm wide and does not land on a 12px box. These spheres are four times the drawn handle and
+  //  write neither colour nor depth, so they are invisible but still raycast: the touch target grows without the
+  //  box looking heavier. They sit on the same corners and are shown/hidden with the handles.
+  const hitGeometry = new THREE.SphereGeometry(1, 8, 6)
+  const hitMaterial = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, transparent: true, opacity: 0 })
+  const hitTargets = CORNERS.map(() => {
+    const mesh = new THREE.Mesh(hitGeometry, hitMaterial)
+    mesh.frustumCulled = false; mesh.visible = false
+    group.add(mesh); return mesh
+  })
   scene.add(group)
 
   const _boxCentre = new THREE.Vector3(), _boxSize = new THREE.Vector3(), _corner = new THREE.Vector3()
@@ -97,6 +108,7 @@ export function createScaleBox({ scene, camera, domElement }) {
     current = target || null
     box.visible = !!current
     for (const handle of handles) handle.visible = !!current && !!handlesVisible
+    for (const target of hitTargets) target.visible = !!current && !!handlesVisible
     if (!current) return
     current.updateMatrixWorld(true)
     const bounds = boundsOf(current)
@@ -107,13 +119,17 @@ export function createScaleBox({ scene, camera, domElement }) {
     box.matrixWorldNeedsUpdate = true
     if (!handlesVisible) return
     for (let i = 0; i < handles.length; i++) {
-      handles[i].position.copy(cornerAt(bounds, i, current.matrixWorld))
-      handles[i].scale.setScalar(HANDLE_PX * worldPerPixel(handles[i].position))
+      const point = cornerAt(bounds, i, current.matrixWorld)
+      const perPixel = worldPerPixel(point)
+      handles[i].position.copy(point)
+      handles[i].scale.setScalar(HANDLE_PX * perPixel)
+      hitTargets[i].position.copy(point)
+      hitTargets[i].scale.setScalar(HIT_PX * 0.5 * perPixel)
     }
   }
 
   const hitTest = (raycaster) => {
-    const visible = handles.filter(h => h.visible)
+    const visible = hitTargets.filter(h => h.visible)
     if (!visible.length) return null
     const hits = raycaster.intersectObjects(visible, false)
     return hits.length ? hits[0].object : null
@@ -163,6 +179,7 @@ export function createScaleBox({ scene, camera, domElement }) {
     dispose: () => {
       scene.remove(group)
       box.geometry.dispose(); boxMaterial.dispose(); handleGeometry.dispose(); handleMaterial.dispose()
+      hitGeometry.dispose(); hitMaterial.dispose()
     },
   }
 }

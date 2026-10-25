@@ -33,3 +33,27 @@
 .intro-copy{min-width:0}
 @media(max-width:760px){.intro{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:420px){.intro h1{font-size:clamp(56px,16vw,66px);max-width:100%;letter-spacing:-.045em}}
+
+/* Give the slicer the page, while leaving its own controls and layout untouched. */
+.workspace{padding:35px 0 30px}
+.viewport-frame{height:min(78svh,900px);min-height:560px}
+@media(max-width:760px){.workspace{padding:32px 0 26px}.viewport-frame{height:72svh;min-height:430px}}
+@media(max-width:420px){.viewport-frame{height:70svh;min-height:390px}}
+
+.work-send{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px 24px;margin-top:12px;padding:12px 14px;background:#1b2021;border:1px solid #343a39}
+.work-send-status{display:flex;align-items:center;gap:10px;min-width:0;color:#b6bcb4;font-size:12px;line-height:1.5}
+.work-send-status>span:last-child{min-width:0}
+.work-send-actions{display:flex;align-items:center;justify-content:flex-end;gap:16px}
+.work-filename{display:grid;gap:5px;min-width:150px}
+.work-filename>span{font:9px var(--mono);letter-spacing:.13em;color:#929991}
+.work-filename input{width:clamp(150px,20vw,260px);min-width:0;background:#121617;color:#eceee8;border:1px solid #3c4440;padding:8px 10px;font:11px var(--mono)}
+.work-send-buttons{display:flex;gap:8px}
+.work-send-buttons .button{margin:0;white-space:nowrap}
+.work-progress{grid-column:1/-1;height:2px;background:#353d38}
+.work-progress>span{height:100%;display:block;background:var(--acid);transition:width .2s}
+@media(max-width:760px){.work-send{grid-template-columns:1fr;gap:10px}.work-send-actions{justify-content:space-between}.work-filename{flex:1}.work-filename input{width:100%}.work-send-buttons{flex:0 0 auto}}
+@media(max-width:480px){.work-send{padding:11px}.work-send-actions{align-items:stretch;flex-direction:column;gap:10px}.work-send-buttons .button{flex:1;justify-content:center;gap:7px;padding:0 9px;font-size:9px}.work-send-status{font-size:11px}}
+@media(max-width:760px) and (orientation:portrait){
+  .viewport-frame{height:90svh;min-height:680px}
+  .work-send-buttons .button{min-height:48px}
+}

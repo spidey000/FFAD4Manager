@@ -181,7 +181,7 @@
 .sc-head-btns { margin-left: auto; display: flex; gap: 4px; }
 .sc-head-btns button { width: 22px; height: 22px; border: 1px solid var(--_light-border); background: var(--_light-subtle); border-radius: 5px; cursor: pointer; font-size: 14px; line-height: 1; color: var(--_light-text); }
 .sc-head-btns button:disabled { opacity: .4; cursor: not-allowed; }
-/* Preset actions carry a label, so they override the 22px square the +/− icon buttons above are sized to. */
+/* Preset actions carry a label, so they keep their natural width. */
 .sc-preset-btns button { width: auto; padding: 0 8px; font-size: 11px; white-space: nowrap; }
 .sc-dirty { color: var(--_warn-ink); font-weight: 600; }
 .sc-info { display: flex; justify-content: space-between; font-size: 12px; color: var(--_light-text-muted); padding: 2px 0; }
@@ -329,7 +329,7 @@
 .sup-paint:disabled { opacity: .45; cursor: not-allowed; }
 /* Sits in the light sidebar, so it cannot borrow .slice-warn's colour (tuned for the dark viewport overlay). */
 .sup-filament-warn { margin: 2px 0 2px 22px; font-size: 11px; line-height: 1.35; color: var(--_warn-ink); }
-.slice-btn { width: 100%; margin-top: 6px; padding: 7px; border: 0; border-radius: 7px;
+.slice-btn { width: 100%; min-height: 48px; margin-top: 6px; padding: 7px; border: 0; border-radius: 7px;
   background: var(--_accent); color: var(--_on-accent); font-weight: 700; cursor: pointer; }
 .slice-btn:disabled { background: var(--_dark-border-strong); color: var(--_dark-text-faint); cursor: not-allowed; }
 .slice-err { color: var(--_danger-on-dark); margin-top: 6px; overflow-wrap: anywhere; }
@@ -520,3 +520,54 @@
 .app-shell[data-layout="compact"] .vp-top-toolbar::-webkit-scrollbar-thumb { background: var(--_dark-text-faint); border-radius: 4px; }
 .app-shell[data-layout="compact"] .vp-top-toolbar button { flex: 0 0 48px; width: 48px; height: 48px; }
 .app-shell[data-layout="compact"] .vp-top-toolbar button img { width: 22px; height: 22px; }
+
+/* Compact workspace touch targets. Keep small controls visually compact, using real 48px boxes where they fit
+   their rows and a transparent pseudo hit-area for the plate strip, whose layout must stay anchored and tight. */
+.app-shell[data-layout="compact"] .plate-bar button { position: relative; min-width: 26px; width: auto; height: 26px; min-height: 26px; }
+.app-shell[data-layout="compact"] .plate-bar button::before { content: ''; position: absolute; inset: -9px; z-index: 1; }
+
+.app-shell[data-layout="compact"] .sc-head-actions button { position: relative; display: inline-flex; min-width: 48px; width: 48px; height: 48px;
+  min-height: 48px; align-items: center; justify-content: center; border: 0; background: transparent; isolation: isolate; }
+.app-shell[data-layout="compact"] .sc-head-actions button::after { content: ''; position: absolute; z-index: -1; width: 46px; height: 21px;
+  border: 1px solid var(--_light-border); border-radius: 4px; background: var(--_light-subtle); }
+.app-shell[data-layout="compact"] .sc-head-btns button { position: relative; display: inline-flex; flex: 0 0 48px; width: 48px; height: 48px;
+  min-width: 48px; min-height: 48px; align-items: center; justify-content: center; border: 0; background: transparent; isolation: isolate; }
+.app-shell[data-layout="compact"] .sc-head-btns:not(.sc-preset-btns) button::after { content: ''; position: absolute; z-index: -1; width: 22px; height: 22px;
+  border: 1px solid var(--_light-border); border-radius: 5px; background: var(--_light-subtle); }
+.app-shell[data-layout="compact"] .sc-head-btns button:disabled { opacity: .4; }
+.app-shell[data-layout="compact"] .sc-preset-btns button { min-height: 48px; }
+.app-shell[data-layout="compact"] .sc-preset-btns button { position: relative; isolation: isolate; flex: 0 0 auto; width: auto; min-width: 48px; height: 48px;
+  border: 0; background: transparent; }
+.app-shell[data-layout="compact"] .sc-preset-btns button::after { content: ''; position: absolute; z-index: -1; inset: 13px 0;
+  border: 1px solid var(--_light-border); border-radius: 5px; background: var(--_light-subtle); }
+
+.app-shell[data-layout="compact"] .filament-row input[type=color] { flex: 0 0 48px; width: 48px; min-width: 48px; height: 48px; min-height: 48px;
+  border: 0; padding: 0; background: transparent; }
+.app-shell[data-layout="compact"] .filament-row input[type="color"]::-webkit-color-swatch-wrapper { padding: 13px 10px; }
+.app-shell[data-layout="compact"] .filament-row input[type="color"]::-webkit-color-swatch { border: 1px solid var(--_light-border); border-radius: 5px; }
+.app-shell[data-layout="compact"] .fil-paint { position: relative; display: inline-flex; flex: 0 0 48px; width: 48px; height: 48px;
+  min-width: 48px; min-height: 48px; align-items: center; justify-content: center; border: 0; background: transparent; isolation: isolate; }
+.app-shell[data-layout="compact"] .fil-paint::after { content: ''; position: absolute; z-index: -1; width: 23px; height: 19px;
+  border: 1px solid var(--_light-border); border-radius: 5px; background: var(--_light-subtle); }
+.app-shell[data-layout="compact"] .fil-paint.on::after { background: var(--_info); border-color: var(--_info); }
+
+.app-shell[data-layout="compact"] .obj-eye, .app-shell[data-layout="compact"] .obj-split,
+.app-shell[data-layout="compact"] .obj-del { position: relative; display: inline-flex; flex: 0 0 48px; width: 48px; height: 48px;
+  min-width: 48px; min-height: 48px; align-items: center; justify-content: center; }
+.app-shell[data-layout="compact"] .obj-eye, .app-shell[data-layout="compact"] .obj-split { background: transparent; }
+.app-shell[data-layout="compact"] .obj-del { border: 0; background: transparent; isolation: isolate; }
+.app-shell[data-layout="compact"] .obj-del::after { content: ''; position: absolute; z-index: -1; width: 28px; height: 19px;
+  border-radius: 5px; background: var(--_danger-soft); pointer-events: none; }
+.app-shell[data-layout="compact"] .obj-del img { position: relative; z-index: 1; }
+.app-shell[data-layout="compact"] .obj-list2 .obj-ext,
+.app-shell[data-layout="compact"] .sc-model,
+.app-shell[data-layout="compact"] .side-card .view-type-row select,
+.app-shell[data-layout="compact"] .gpu-accel select,
+.app-shell[data-layout="compact"] .slice-workers select { min-height: 48px; }
+.app-shell[data-layout="compact"] .obj-list2 .obj-ext { min-width: 48px; }
+.app-shell[data-layout="compact"] .auto-slice,
+.app-shell[data-layout="compact"] .gpu-accel,
+.app-shell[data-layout="compact"] .slice-support { min-height: 48px; }
+.app-shell[data-layout="compact"] .slice-support input,
+.app-shell[data-layout="compact"] .auto-slice input { width: 20px; height: 20px; margin: 0; }
+.app-shell[data-layout="compact"] .vp-status { bottom: 58px; }

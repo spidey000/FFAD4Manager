@@ -68,7 +68,7 @@ Run the Python service and the Cloudflare Tunnel connector on the **same Linux h
 
 ## Install on Linux
 
-Install the basic system packages (and install a current Node.js LTS separately if it is not already present):
+Install the basic system packages (and install a current [Node.js LTS](https://nodejs.org/en/download) separately if it is not already present):
 
 ~~~bash
 sudo apt update
@@ -124,9 +124,9 @@ Stop the foreground server with Ctrl+C. To use the UI from outside your LAN, con
 
 ## Secure remote installation: Cloudflare Tunnel + Access
 
-1. In **Cloudflare Zero Trust**, create a Tunnel whose connector runs on the **same host** as FFADV4Manager. Install and start cloudflared using the Linux connector instructions Cloudflare provides. Keep the tunnel token outside the repository.
+1. In **Cloudflare Zero Trust**, create a Tunnel whose connector runs on the **same host** as FFADV4Manager. Install and start cloudflared using [Cloudflare's official Tunnel setup guide](https://developers.cloudflare.com/tunnel/get-started/) and the Linux connector commands shown in your dashboard. Keep the tunnel token outside the repository.
 2. Add a **public hostname**, for example **printer.example.com**, pointing to service **http://127.0.0.1:8765**. Do not point the tunnel directly at the printer.
-3. Create a **Cloudflare Access self-hosted application** for **https://printer.example.com** and an Allow policy limited to your own approved email address. Find the application's **AUD tag** in its settings and your Access team domain (e.g. **myteam.cloudflareaccess.com**).
+3. Create a [**Cloudflare Access self-hosted application**](https://developers.cloudflare.com/learning-paths/clientless-access/access-application/create-access-app/) for **https://printer.example.com** and an Allow policy limited to your own approved email address. Find the application's **AUD tag** in its settings and your Access team domain (e.g. **myteam.cloudflareaccess.com**).
 4. Supply the four bridge settings below, with your own values. The public origin must be the exact HTTPS origin, **without a trailing slash**:
 
 ~~~bash
@@ -232,7 +232,7 @@ Additional commands include **discover**, **info**, **position**, **inspect**, *
 
 ## Security and limitations
 
-The printer protocol on TCP 8899 and camera HTTP stream have **no built-in authentication or encryption**. Restrict them to your trusted LAN; use Cloudflare Tunnel + Access only for the loopback web bridge. Do not check in Cloudflare tokens, local access settings, private configuration files, logs, credentials or printer-identifying data. The bridge has deliberately narrow endpoints, a short-lived per-process browser token, request-size limits and JWT checks, but is not a general-purpose Internet-facing printer-control API.
+The printer protocol on TCP 8899 and camera HTTP stream have **no built-in authentication or encryption**. Restrict them to your trusted LAN; use Cloudflare Tunnel + Access only for the loopback web bridge. Do not check in Cloudflare tokens, local access settings, private configuration files, logs, credentials or printer-identifying data. The bridge has deliberately narrow endpoints, a randomly generated per-process browser token, request-size limits and JWT checks, but is not a general-purpose Internet-facing printer-control API.
 
 Always supervise remote print start, motion, fan and cancellation operations. Firmware behavior varies, even when a command reports an ACK. This software is provided as-is.
 

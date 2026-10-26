@@ -87,9 +87,17 @@ def extract_metadata(lines: list[str], profile: PrinterProfile | None = None) ->
             if parsed > 0:
                 meta.print_time = min(parsed, 2147483647)
         elif key in ("filament used [mm]", "filament_mm", "filament used [m]"):
-            vals = _parse_int_list(value)
             if key == "filament used [m]":
-                vals = [min(v * 1000, 2147483647) for v in vals]
+                vals = []
+                for part in value.split(","):
+                    try:
+                        metres = float(part.strip())
+                        if 0 <= metres <= 2147483:
+                            vals.append(round(metres * 1000))
+                    except ValueError:
+                        continue
+            else:
+                vals = _parse_int_list(value)
             if vals:
                 meta.filament_right_mm = vals[0]
             if len(vals) > 1:

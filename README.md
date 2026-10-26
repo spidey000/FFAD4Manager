@@ -1,314 +1,241 @@
 # FFADV4Manager
 
-FFADV4Manager is an open-source Python command-line toolkit for controlling legacy FlashForge printers that are no longer well supported by current FlashForge desktop software. The `ffadv4manager` CLI is designed for Linux terminals and AI-agent workflows; `ad4ctl` remains as a compatibility alias.
+**Self-hosted FlashForge Adventurer 4 toolkit:** a Python CLI for printer control plus a responsive, locally hosted 3D slicer UI. Use Cloudflare Tunnel and Access to reach the web UI from anywhere without exposing the printer to the Internet.
 
-The first target is the **FlashForge Adventurer 4** on TCP port `8899`. Earlier
-project notes refer to a separate test on firmware `v2.3.3-3.33`; the printer
-used in the 2026-10-18 upload investigation reported firmware `v2.2.4` via M115.
+## Install with an AI agent
 
-## Current status
+Copy this **single-line prompt** into an AI agent with terminal access to your Linux server:
 
-Working today:
+~~~text
+Install and configure https://github.com/spidey000/FFAD4Manager for my FlashForge Adventurer 4 on a Linux host that can reach the printer on its local network: read this README and the actual source first; install Python 3.9+, Node.js 20+, Git and required dependencies; clone the repository, create an isolated Python virtual environment, run pip install -e ., then npm ci and npm run build in web/; configure the printer LAN IP (TCP 8899) and camera (HTTP 8080), verify ffadv4manager status and a camera snapshot, and run the loopback-only web bridge at 127.0.0.1:8765 as a persistent systemd service; for remote use, configure Cloudflare Tunnel to this loopback origin, protect the public hostname with a Cloudflare Access application restricted to my approved email, and run the bridge with --require-access and valid CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD, CF_ACCESS_EMAIL and CF_ACCESS_PUBLIC_ORIGIN environment variables; ask for missing printer IP, hostname, Access configuration or approval instead of guessing; never open printer ports or port 8765 to the Internet, never commit credentials or secrets, and verify both authorized access and unauthenticated rejection; preserve existing safety restrictions (browser upload/start is currently disabled, while CLI upload/print works), test before declaring success, avoid unrelated changes and do not create unnecessary documentation.
+~~~
 
-- Printer status
-- Temperature readout
-- Print progress readout
-- Parsed and raw printer file listings (`files`, `files-raw`)
-- Upload G-code/GX files
-- Confirm uploaded filename appears in M661; this does not verify stored size/content
-- Optional timestamped JSONL logs of printer upload/verification replies (`--log-file`)
-- Start prints remotely
-- Pause/resume/cancel commands
-- Live `watch` mode
-- UDP printer discovery, with optional JSON output
-- Camera stream URL, browser launch, and bounded JPEG snapshot (`camera snapshot`)
+> The prompt is **instructions for an agent**, not a shell command. An agent needs terminal access and your participation for Cloudflare authentication and Access policy setup. It must not invent domain names, printer IPs, email addresses, or credentials.
 
-See the [printer command and G-code evidence catalog](docs/PRINTER-COMMANDS.md)
-for device responses, implemented commands, test-file contents, and explicit
-uncertainty/safety notes. It is not an exhaustive Adventurer 4 command list.
+## What works
 
-Planned CLI and protocol improvements:
+The CLI and the web UI are not interchangeable. The current web bridge deliberately exposes only a narrow set of operations.
 
-- Support for related FlashForge models
+| Capability | CLI | Web UI |
+| --- | :---: | :---: |
+| Read printer status, temperatures, progress | Yes | No |
+| List printer files and fetch GX/BMP preview | Yes | No |
+| Upload G-code or GX | Yes | **Disabled** |
+| Start / pause / resume / cancel printing | Yes | **Not available** |
+| Convert G-code to GX with embedded preview | Yes | Via the CLI during upload only; browser upload disabled |
+| Slice 3D models and preview layers | No | Yes |
+| Camera snapshot | Yes | Yes |
+| Camera live MJPEG URL | Yes | No live feed in UI |
+| Interval-based timelapse capture | Yes | No timelapse manager in UI |
+| Discover printers over LAN | Yes | No |
+| Printer information, axes and diagnostics | Yes | No |
+| Part-cooling fan on/off | Yes | No |
+| Monitoring, state-change logs, wait conditions | Yes | No |
+| Desktop notifications via Linux notify-send | Yes | No |
+| Named local printer connection profiles | Yes | No |
 
-## Linux CLI installation and use
+**Important:** browser upload and print-start are intentionally disabled in the currently bundled Three Slicer UI because its upstream slicer does not expose a reliable model/paint revision signal. The server implements an authenticated upload API, but the UI cannot safely confirm that a sliced file still matches the current model. Do not remove this safeguard merely to make a button clickable. Use the CLI for uploads and printing until that provenance check is resolved.
 
-The Python CLI works from a terminal on Linux with Python 3.9 or newer. From a
-checkout, install it in an isolated virtual environment:
+This is **alpha software** tested primarily against one Adventurer 4 reporting firmware v2.2.4. Some printer responses and physical effects are only partially verified. See [CLI reference](docs/CLI.md) and [printer protocol evidence](docs/PRINTER-COMMANDS.md).
 
-```bash
+## How remote access works
+
+~~~text
+Your browser (anywhere)
+         |
+   HTTPS + Cloudflare Access
+         |
+     Cloudflare Tunnel
+         |
+ Linux host on the printer's LAN
+   127.0.0.1:8765  (FFADV4Manager web bridge)
+         |
+      FlashForge Adventurer 4
+   TCP 8899 (commands) / HTTP 8080 (camera)
+~~~
+
+Run the Python service and the Cloudflare Tunnel connector on the **same Linux host**, or provide equivalent private routing. The bridge listens on 127.0.0.1 only; the printer's raw services are not publicly accessible. Cloudflare Access controls admission, and the bridge independently validates the Access JWT for requests arriving on the public hostname.
+
+**Do not forward TCP 8899, HTTP 8080, or 8765 through your router. Do not publish the bridge without Access.** GitHub Pages alone cannot run the Python bridge or reach your local printer.
+
+## Requirements
+
+- Linux machine (Ubuntu 24.04 is a suitable example) that remains powered on and can reach the printer over the LAN/VPN.
+- FlashForge Adventurer 4 with a known local IP. Default command port: **8899**; default MJPEG camera port: **8080**.
+- Python **3.9+**, with venv and pip; Git.
+- Node.js **20+** and npm to build the web UI (use an actively supported Node LTS).
+- For Internet access: a Cloudflare account, a hostname on a domain managed in Cloudflare, a Cloudflare Tunnel, and an Access application/policy.
+
+## Install on Linux
+
+Install the basic system packages (and install a current Node.js LTS separately if it is not already present):
+
+~~~bash
+sudo apt update
+sudo apt install -y git python3 python3-venv python3-pip
+node --version
+npm --version
+~~~
+
+Clone the project and install the CLI in a virtual environment:
+
+~~~bash
+git clone https://github.com/spidey000/FFAD4Manager.git
+cd FFAD4Manager
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e .
-```
+~~~
 
-Set a printer address, then run commands without repeating it:
+Build the included web UI:
 
-```bash
-ffadv4manager config set --host 192.168.1.50
-ffadv4manager status
-ffadv4manager files
-ffadv4manager help                 # comprehensive guide; no printer connection
-ffadv4manager help upload          # command-specific help; no printer connection
-ffadv4manager discover --json      # find printers without a configured host
-```
-
-You can also pass a host directly, e.g. `ffadv4manager --host 192.168.1.50 status`.
-See [Configuration](#configuration) and [Usage](#usage) for details.
-For the full command reference, see [docs/CLI.md](docs/CLI.md).
-
-## Configuration
-
-Rather than passing `--host` on every command, store connection defaults once:
-
-```bash
-ffadv4manager config set --host 192.168.1.50
-ffadv4manager config set --host 192.168.1.50 --port 8899 --timeout 8
-ffadv4manager config set --camera-port 8080 --camera-path '/?action=stream'
-```
-
-Then commands can be run without flags:
-
-```bash
-ffadv4manager status
-ffadv4manager files
-```
-
-A flag always overrides the stored value, so you can point at a different printer
-temporarily:
-
-```bash
-ffadv4manager --host 192.168.1.60 status
-```
-
-Inspect or clear the stored config:
-
-```bash
-ffadv4manager config show
-ffadv4manager config path
-ffadv4manager config unset port camera_path
-```
-
-The config lives at `~/.config/ffadv4manager/config.ini` (respecting `XDG_CONFIG_HOME`).
-Set `FFADV4MANAGER_CONFIG` to point at a different file. It takes precedence over
-legacy `AD4CONNECT_CONFIG`, which is used when the new variable is unset. If no
-override is set and the new default config is absent, the existing
-`~/.config/ad4connect/config.ini` (or its `XDG_CONFIG_HOME` equivalent) is read.
-Writes go to the new path and leave the legacy file untouched.
-Camera defaults are `camera_port = 8080` and `camera_path = /?action=stream`;
-camera command options override them. Camera paths are kept literally, including
-query strings.
-
-## Usage
-
-```bash
-ffadv4manager --host 192.168.1.50 status
-ffadv4manager --host 192.168.1.50 files
-ffadv4manager --host 192.168.1.50 files-raw
-ffadv4manager --host 192.168.1.50 watch
-ffadv4manager discover
-ffadv4manager discover --json
-```
-
-Upload only:
-
-```bash
-ffadv4manager --host 192.168.1.50 upload ~/Downloads/model.gcode --remote-name model.gcode
-```
-
-The input must be an existing, non-empty G-code/GX file (typically exported by a
-slicer); empty files are rejected before the upload starts. The upload command
-does not generate or slice a model. Without `--start`, it only uploads and
-checks that M661 lists the uploaded filename; it does not select or print the
-file in the client command path. M661 confirms listed presence only, not stored
-size or content integrity. On this printer, an older upload-only verification
-path issued M23 and the user observed the file execute; the current path omits
-M23/M24. M601 S1 is still part of the preamble and its firmware-side effect is
-not authoritatively documented, so this is not a proven physical no-start
-guarantee. Supervise the printer during uploads until verified on your firmware.
-Use the separate `print` command to start an already-uploaded file, or pass
-`--start` to explicitly opt into printing after M661 lists the filename.
-
-Upload and start:
-
-```bash
-ffadv4manager --host 192.168.1.50 upload ~/Downloads/model.gcode --remote-name model.gcode --start --log-file upload.jsonl
-```
-
-With `--start`, the CLI starts the job only after the printer acknowledges upload
-completion and M661 lists the uploaded filename. M661 confirms presence only;
-this workflow does not verify stored size or content integrity before starting.
-The JSONL log is appended and includes the printer's raw protocol replies.
-
-Print an existing printer-side file:
-
-```bash
-ffadv4manager --host 192.168.1.50 print model.gcode
-```
-
-Pause/resume/cancel:
-
-```bash
-ffadv4manager --host 192.168.1.50 pause
-ffadv4manager --host 192.168.1.50 resume
-ffadv4manager --host 192.168.1.50 cancel
-```
-
-## Discovery and camera
-
-Discovery sends UDP multicast/broadcast probes to the supported FlashForge
-discovery targets and listens for up to three seconds by default. It needs no
-stored host and does not open a printer command connection:
-
-```bash
-ffadv4manager discover
-ffadv4manager discover --timeout 5 --json
-```
-
-On an interactive terminal, plain `discover` offers to save the discovered host
-as the local default only when a printer advertises command port `8899`. If more
-than one printer advertises that port, select one and confirm before saving. The
-port is the value advertised in the UDP discovery response; the command does not
-scan TCP ports or the subnet. `--json` and non-interactive runs never prompt or
-write the config. If no eligible printer is found, the config is unchanged.
-
-Camera commands use the configured printer host (or an explicit root `--host`)
-and the camera's separate HTTP MJPEG endpoint. The defaults are port `8080` and
-path `/?action=stream`:
-
-```bash
-ffadv4manager camera url                         # prints only the URL; useful for piping
-ffadv4manager camera open                        # asks the system browser to open it
-ffadv4manager camera snapshot /tmp/ad4-frame.jpg # saves first complete JPEG frame
-ffadv4manager --host 192.168.1.60 camera url --camera-port 8081
-```
-
-`camera snapshot OUTPUT` saves the first complete JPEG frame to the given path;
-for example, `/tmp/ad4-frame.jpg` above. `camera url` prints a URL without
-connecting, while `camera open` requires a usable desktop browser.
-
-`camera open` depends on `webbrowser` finding a usable desktop browser; in a
-headless environment it reports that it could not open the browser and shows the
-URL. Use `camera url` or `camera snapshot` in terminal-only/agent workflows.
-Snapshot download is bounded and only writes a complete JPEG frame. The camera
-HTTP stream has no authentication or encryption, so expose/use it only on a
-trusted network. These camera operations use HTTP, not the printer-control TCP
-protocol.
-
-## Protocol notes
-
-The Adventurer 4 exposes a legacy FlashForge TCP service on port `8899`. Commands are sent as:
-
-```text
-~M119\r\n
-```
-
-Protocol evidence is limited to one Adventurer 4 unit/firmware: replies and
-reported state do not establish universal firmware behavior or physical effect.
-Read-only queries (including status, M114/M115, M661 and M662) responded;
-M662 returned a complete BMP. Supervised tests also observed M106/M107 fan
-effects and transitions for M24/M25/M26, but the print-control test stayed at
-`0/100`, and small movement probes were not visually resolved. M104 ACKs and
-changing current-temperature telemetry did not confirm a nozzle setpoint. Upload
-listing does not verify file contents, and an earlier upload path preceded
-unexpected execution. See the [evidence catalog](docs/PRINTER-COMMANDS.md) for
-the hardware-confirmed, partial, static-only, and do-not-probe classifications.
-
-Commands present in the client/protocol:
-
-| Command | Purpose |
-| --- | --- |
-| `M119` | Printer state / current file |
-| `M105` | Temperature state |
-| `M27` | Print progress |
-| `M661` | File listing |
-| `M601 S1`, `M115`, `M650`, `M119` | Acknowledged upload preamble (separate connection) |
-| `M28 <size> 0:/user/file.gcode` | Begin file upload with declared byte size and destination |
-| `M29` | Finish file upload |
-| `M23 0:/user/file.gcode` | Select file (only for explicit print/start actions) |
-| `M24` | Start/resume print |
-| `M25` | Pause print |
-| `M26` | Cancel/reset SD print state |
-
-Uploads require a standalone `ok` response after every preamble command, M28
-readiness, and M29 completion. Payload is sent as raw chunks followed by a 3-second
-flush delay. Upload-only checks M661 for the basename in either `/data/` or
-`0:/user/` and does not issue M23/M24. M661 confirms listed presence only, not
-stored size or content integrity. M23/M24 are reserved for explicit print/start
-actions. M115 from the investigated printer reported firmware `v2.2.4`; the
-older `v2.3.3-3.33` note is from a separate project test.
-
-## Safety
-
-This is early alpha software. Watch the printer when starting prints remotely. Use at your own risk.
-
-## OrcaSlicer Linux post-processing hook
-
-The optional `scripts/orca_ad4_upload.py` hook accepts the generated G-code path
-as a final positional argument. In the verified OrcaSlicer Linux post-processing
-contract, Orca runs each configured command line through `$SHELL -c` and appends
-the G-code path as one shell-quoted final argument. The tested contract is based
-on OrcaSlicer source commit `1ee0b730a1e6484e55a631dd567b41c986fc1d6a`; downstream
-builds or versions may differ.
-
-Configure one command per line in OrcaSlicer, for example:
-
-```sh
-'/home/user/venv/bin/python' '/home/user/FFADV4Manager/scripts/orca_ad4_upload.py' --host 192.168.1.50 --start
-```
-
-Quote paths to the Python executable and script in the configured command, and
-use shell quoting if either path contains spaces or quote characters. OrcaSlicer
-appends the generated G-code filename automatically, quoting it as a single shell
-word (including paths with spaces or single quotes). **Do not append a filename
-placeholder** such as `$1` or `{file}`. The hook also accepts `--gcode PATH` for
-manual invocation, or `--gcode` may be omitted in favor of the appended positional
-path.
-
-The hook uses `--host` when supplied; otherwise it reads the same stored config
-as `ffadv4manager`. It also honors explicit `--port` / `--timeout` before the stored
-values and built-in defaults. It checks printer status before uploading and,
-with `--start`, checks again immediately before starting the print. An unavailable
-or unparseable status and a busy printer fail closed by default. `--force`
-explicitly bypasses these status gates; `--start` remains opt-in. Hook failures
-return nonzero, which OrcaSlicer treats as export failure under the verified
-contract. Usage/configuration errors return status 2; operational errors return
-status 1.
-
-## Local Three_Slicer Adventurer 4 UI
-
-The optional local web UI embeds the published Three_Slicer viewer/slicer with
-the bundled Adventurer 4 0.4 mm nozzle, process, and filament presets. It is a
-separate browser UI, not a native printer feature in upstream Three_Slicer.
-Configure the printer and build the web app once:
-
-```sh
-ffadv4manager config set --host 192.168.1.50
+~~~bash
 cd web
 npm ci
 npm run build
 cd ..
+~~~
+
+Configure and test your own printer IP:
+
+~~~bash
+ffadv4manager config set --host 192.168.1.50 --port 8899
+ffadv4manager status
+ffadv4manager files
+ffadv4manager camera snapshot /tmp/ad4-camera.jpg
+~~~
+
+Replace **192.168.1.50** with your printer's LAN address. If you do not know the IP, run **ffadv4manager discover** from the printer's LAN; UDP discovery may not cross subnets or VPNs.
+
+Local configuration is stored at ~/.config/ffadv4manager/config.ini (or the configured XDG path), **not in the repository**. Run **ffadv4manager help** and **ffadv4manager config show** to inspect available commands and settings.
+
+## Launch the local web UI
+
+From the repository root, with the Python environment active:
+
+~~~bash
 ffadv4manager slicer
-```
+~~~
 
-The manager serves it only on `127.0.0.1:8765`. After slicing, choose **UPLOAD
-FILE** to upload only, or **UPLOAD + START** and confirm to request a print start.
-The local bridge invokes the existing CLI, which converts G-code to GX as needed.
-An accepted upload/start command is not proof that the printer stored the exact
-file or physically began printing; supervise first use. Requests are limited to
-64 MiB. The `three-slicer` npm package is AGPL-3.0-or-later; review its license
-obligations before redistributing a built application.
+On the Linux host, open **http://127.0.0.1:8765**. This is for local testing only. The current UI supports browser-based slicing, layer preview, settings and a camera snapshot. It is **not yet a complete printer-management dashboard**, and its send/print buttons are locked as explained above.
 
-## GX converter attribution and license
+Stop the foreground server with Ctrl+C. To use the UI from outside your LAN, configure Access and the tunnel below.
 
-FFADV4Manager is distributed under the GNU General Public License v3.0 or later
-(GPL-3.0-or-later); see [LICENSE](LICENSE). It includes an adapted, in-process
-GX conversion implementation based on [HellEvro/FF_Gcode_to_GX](https://github.com/HellEvro/FF_Gcode_to_GX)
-version 1.1.0, upstream commit `b44b5760671594e4c0a0234131adc7f398338349`,
-copyright © 2026 Gcode_to_Gx contributors and licensed under GPL-3.0-or-later.
-The adapted GX writer, metadata parser, thumbnail encoder, and Adventurer printer
-profile implementation are located in `ffadv4manager/core/gx_converter/`.
-The upstream project notes that its design is based in part on
-[urself25/Orca_Gcode_to_Gx](https://github.com/urself25/Orca_Gcode_to_Gx),
-also licensed under GPLv3.
+## Secure remote installation: Cloudflare Tunnel + Access
+
+1. In **Cloudflare Zero Trust**, create a Tunnel whose connector runs on the **same host** as FFADV4Manager. Install and start cloudflared using the Linux connector instructions Cloudflare provides. Keep the tunnel token outside the repository.
+2. Add a **public hostname**, for example **printer.example.com**, pointing to service **http://127.0.0.1:8765**. Do not point the tunnel directly at the printer.
+3. Create a **Cloudflare Access self-hosted application** for **https://printer.example.com** and an Allow policy limited to your own approved email address. Find the application's **AUD tag** in its settings and your Access team domain (e.g. **myteam.cloudflareaccess.com**).
+4. Supply the four bridge settings below, with your own values. The public origin must be the exact HTTPS origin, **without a trailing slash**:
+
+~~~bash
+export CF_ACCESS_TEAM_DOMAIN='myteam.cloudflareaccess.com'
+export CF_ACCESS_AUD='YOUR_ACCESS_APPLICATION_AUD_TAG'
+export CF_ACCESS_EMAIL='you@example.com'
+export CF_ACCESS_PUBLIC_ORIGIN='https://printer.example.com'
+ffadv4manager slicer --require-access
+~~~
+
+The bridge requires all four settings and verifies the signed Access assertion, issuer, audience and permitted email for public-origin requests. If you intentionally use a Cloudflare service token for machine access, the optional **CF_ACCESS_SERVICE_TOKEN_ID** is supported; do not configure it unless needed. Access is not configured automatically by the Python application.
+
+For an unattended Linux service, keep settings in a **root-owned file outside the checkout** (for example /etc/ffadv4manager/access.env, mode 0600). A minimal systemd unit is:
+
+~~~ini
+[Unit]
+Description=FFADV4Manager web bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=YOUR_LINUX_USER
+WorkingDirectory=/home/YOUR_LINUX_USER/FFAD4Manager
+EnvironmentFile=/etc/ffadv4manager/access.env
+ExecStart=/home/YOUR_LINUX_USER/FFAD4Manager/.venv/bin/ffadv4manager slicer --require-access
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+~~~
+
+Save as **/etc/systemd/system/ffadv4manager.service**, replacing the Linux username and paths. Put the four settings in **/etc/ffadv4manager/access.env** as plain **KEY=value** lines (no **export**). Then run:
+
+~~~bash
+sudo chmod 600 /etc/ffadv4manager/access.env
+sudo systemctl daemon-reload
+sudo systemctl enable --now ffadv4manager
+sudo systemctl status ffadv4manager
+~~~
+
+Manage **cloudflared** as its own service using Cloudflare's supported installation process; do not run a second public-facing web server or reverse proxy unless your network requires one.
+
+**Verification:** locally, visit http://127.0.0.1:8765 from the server; remotely, open the HTTPS hostname in a private browser window, confirm Cloudflare Access blocks unauthenticated access, sign in with the allowed identity, then test slicing and the camera snapshot. Check logs with **sudo journalctl -u ffadv4manager -n 100 --no-pager**. A successful web login is not proof that printer or camera communication works: verify CLI status separately.
+
+## Everyday CLI commands
+
+These commands run on the Linux host that can contact the printer.
+
+~~~bash
+ffadv4manager status
+ffadv4manager status --json
+ffadv4manager files
+ffadv4manager files preview example.gx --output /tmp/example.bmp
+ffadv4manager watch --interval 5
+ffadv4manager doctor
+ffadv4manager camera url
+ffadv4manager camera snapshot /tmp/snapshot.jpg
+ffadv4manager camera timelapse ./captures --interval 10 --count 60
+ffadv4manager fan on
+ffadv4manager fan off
+~~~
+
+To convert and upload a G-code file (leaving the original untouched):
+
+~~~bash
+ffadv4manager convert model.gcode --output model.gx
+ffadv4manager upload model.gcode
+~~~
+
+To **explicitly start a physical print**, after checking machine state and model suitability:
+
+~~~bash
+ffadv4manager upload model.gcode --start
+# Or start an already stored printer-side file:
+ffadv4manager print model.gx
+~~~
+
+To control an ongoing job:
+
+~~~bash
+ffadv4manager pause
+ffadv4manager resume
+ffadv4manager cancel
+~~~
+
+G-code uploads are automatically wrapped as GX where appropriate, with a printer-compatible embedded BMP thumbnail and recognized metadata when present. Conversion does **not** repair incompatible toolpaths. A listed upload (M661) confirms the filename appears, **not** the stored file's byte-for-byte integrity. On some firmware, the upload protocol has had uncertain side effects; supervise first-time use and any remote printing.
+
+Additional commands include **discover**, **info**, **position**, **inspect**, **wait**, **monitor**, **notify**, **profiles**, **printer rename** and **config**. See [full CLI usage](docs/CLI.md). An optional [OrcaSlicer Linux post-processing hook](scripts/orca_ad4_upload.py) is also included.
+
+## Troubleshooting
+
+| Problem | Check |
+| --- | --- |
+| Status fails | Host IP, power, same LAN/private route, TCP 8899, stored config |
+| Camera snapshot fails | Camera availability and HTTP 8080, camera URL/path; the printer camera may need enabling |
+| Web page unavailable locally | Run npm build; ensure web/dist/index.html exists; check that port 8765 is free |
+| Web page unavailable remotely | cloudflared connector, hostname route, Access policy, matching team domain/AUD/origin/email, systemd logs |
+| Remote request returns 401/403 | Complete Access login; check identity and the bridge JWT configuration |
+| Web upload or print button unavailable | **Expected with the current upstream slicer revision-safety restriction**; use the CLI |
+| Timelapse or live video missing in web UI | Not implemented there yet; use CLI timelapse / camera URL on a trusted network |
+
+## Security and limitations
+
+The printer protocol on TCP 8899 and camera HTTP stream have **no built-in authentication or encryption**. Restrict them to your trusted LAN; use Cloudflare Tunnel + Access only for the loopback web bridge. Do not check in Cloudflare tokens, local access settings, private configuration files, logs, credentials or printer-identifying data. The bridge has deliberately narrow endpoints, a short-lived per-process browser token, request-size limits and JWT checks, but is not a general-purpose Internet-facing printer-control API.
+
+Always supervise remote print start, motion, fan and cancellation operations. Firmware behavior varies, even when a command reports an ACK. This software is provided as-is.
+
+## License and credits
+
+FFADV4Manager is licensed under **GPL-3.0-or-later**; see [LICENSE](LICENSE). The bundled GX converter adapts [HellEvro/FF_Gcode_to_GX](https://github.com/HellEvro/FF_Gcode_to_GX) (GPL-3.0-or-later), itself informed in part by [urself25/Orca_Gcode_to_Gx](https://github.com/urself25/Orca_Gcode_to_Gx). The optional Three Slicer frontend uses the [three-slicer](https://www.npmjs.com/package/three-slicer) package (AGPL-3.0-or-later); review its redistribution obligations.

@@ -31,6 +31,10 @@ Planned CLI and protocol improvements:
 
 - Support for related FlashForge models
 
+## Adventurer 4 GX touchscreen previews and metadata
+
+The built-in G-code → GX converter writes an 80×60 grayscale BMP model preview and the slicer's estimated duration, filament length, layer height, wall count, print speed and heater metadata when provided in G-code comments. It never changes heater or movement commands to match metadata. **An absent time estimate is unknown (0 seconds), not a fabricated estimate.** ThreeSlicer Responsive can supply both thumbnail and time when the viewer provides them. For compatibility, binary offsets, supported comment syntax and device-testing instructions, see [AD4 GX metadata](docs/AD4_GX_METADATA.md).
+
 ## Linux CLI installation and use
 
 The Python CLI works from a terminal on Linux with Python 3.9 or newer. From a
